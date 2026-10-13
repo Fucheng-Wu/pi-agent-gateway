@@ -1,0 +1,15 @@
+{
+  "name": "learn-pi",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.22.0",
+  "scripts": {
+    "dev": "concurrently -k -n backend,frontend \"pnpm --filter ./backend dev\" \"pnpm --filter ./frontend dev\"",
+    "build": "pnpm --filter ./backend build && pnpm --filter ./frontend build",
+    "typecheck": "pnpm --filter ./backend typecheck && pnpm --filter ./frontend typecheck",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  }
+}

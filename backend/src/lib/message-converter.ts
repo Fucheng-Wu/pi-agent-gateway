@@ -1,0 +1,124 @@
+import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { ChatMessage, ContextUsage, ToolCall } from "../../../shared/types.js";
+
+type RecordLike = Record<string, unknown>;
+
+function record(value: unknown): RecordLike | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as RecordLike
+    : undefined;
+}
+
+function string(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function contentText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.map((part) => {
+      const block = record(part);
+      return block?.type === "text" ? string(block.text) ?? "" : "";
+    }).filter(Boolean).join("\n");
+  }
+  return "";
+}
+
+function timestamp(value: unknown): string | undefined {
+  if (typeof value !== "number" && typeof value !== "string") return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function toolOutput(value: unknown): string {
+  const item = record(value);
+  if (!item) return "";
+  const text = contentText(item.content);
+  if (text) return text;
+  if (item.details !== undefined) {
+    try { return JSON.stringify(item.details, null, 2); } catch { /* ignored */ }
+  }
+  return "";
+}
+
+/** Builds a transcript from the current Pi branch, joining tool results to their calls. */
+export function convertMessages(messages: readonly unknown[]): ChatMessage[] {
+  const converted: ChatMessage[] = [];
+  const tools = new Map<string, ToolCall>();
+
+  messages.forEach((raw, index) => {
+    const item = record(raw);
+    if (!item) return;
+    const id = string(item.id) ?? `message-${index}`;
+    const at = timestamp(item.timestamp);
+
+    if (item.role === "user") {
+      converted.push({ id, role: "user", text: contentText(item.content), timestamp: at });
+      return;
+    }
+
+    if (item.role === "assistant") {
+      const blocks = Array.isArray(item.content) ? item.content : [];
+      const text: string[] = [];
+      const thinking: string[] = [];
+      const calls: ToolCall[] = [];
+      for (const rawBlock of blocks) {
+        const block = record(rawBlock);
+        if (!block) continue;
+        if (block.type === "text") text.push(string(block.text) ?? "");
+        else if (block.type === "thinking") thinking.push(string(block.thinking) ?? "");
+        else if (block.type === "toolCall") {
+          const call: ToolCall = {
+            id: string(block.id) ?? `tool-${index}-${calls.length}`,
+            name: string(block.name) ?? "tool",
+            input: block.arguments,
+            status: "running",
+          };
+          calls.push(call);
+          tools.set(call.id, call);
+        }
+      }
+      const error = item.stopReason === "error" ? string(item.errorMessage) ?? "Model error" : undefined;
+      converted.push({
+        id,
+        role: "assistant",
+        text: text.join(""),
+        thinking: thinking.join(""),
+        tools: calls.length ? calls : undefined,
+        timestamp: at,
+        error,
+      });
+      return;
+    }
+
+    if (item.role === "toolResult") {
+      const callId = string(item.toolCallId);
+      const output = toolOutput(item);
+      const call = callId ? tools.get(callId) : undefined;
+      if (call) {
+        call.output = output;
+        call.status = item.isError === true ? "error" : "done";
+      } else if (output) {
+        converted.push({ id, role: "tool", text: output, timestamp: at });
+      }
+    }
+  });
+
+  return converted;
+}
+
+export function titleFromMessages(messages: readonly ChatMessage[]): string {
+  const first = messages.find((message) => message.role === "user" && message.text.trim());
+  return first ? first.text.replace(/\s+/g, " ").trim().slice(0, 64) : "新对话";
+}
+
+export function contextUsageFromSession(session: AgentSession): ContextUsage | undefined {
+  const usage = session.getContextUsage();
+  if (!usage || usage.contextWindow <= 0 || usage.tokens === null) return undefined;
+  const usedTokens = usage.tokens;
+  return {
+    usedTokens,
+    contextWindow: usage.contextWindow,
+    percent: usage.percent ?? (usedTokens / usage.contextWindow) * 100,
+  };
+}
