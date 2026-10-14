@@ -1,10 +1,10 @@
 # learn-pi
 
-基于 pi SDK 的本地 Web 聊天界面。前端使用 Vue 3、Pinia、Vite 和 Tailwind；后端使用 Hono、WebSocket 和 `@mariozechner/pi-coding-agent`。前后端共用 `shared/types.ts` 中的消息协议。
+基于 pi SDK 的本地 Web 聊天界面。前端使用 Vue 3、Pinia、Vite 和 Tailwind；后端使用 Hono、WebSocket 和 `@earendil-works/pi-coding-agent`。前后端共用 `shared/types.ts` 中的消息协议。
 
 ## 启动
 
-需要 Node.js 22+ 和 pnpm 10+。
+需要 Node.js 22.19+ 和 pnpm 10+。
 
 ```powershell
 pnpm install

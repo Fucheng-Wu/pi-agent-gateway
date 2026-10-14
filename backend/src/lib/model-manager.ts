@@ -23,22 +23,19 @@ export class ModelManager {
   }
 
   getProvidersInfo(): ProviderInfo[] {
-    const registry = this.resources.modelRegistry;
-    const auth = this.resources.authStorage;
-    const all = registry.getAll();
-    const oauth = new Map(auth.getOAuthProviders().map((provider) => [provider.id, provider]));
-    const ids = new Set([...all.map((model) => model.provider), ...oauth.keys(), ...auth.list()]);
-
-    return [...ids].sort().map((id) => ({
-      id,
-      name: registry.getProviderDisplayName(id) || oauth.get(id)?.name || id,
-      authenticated: auth.hasAuth(id) || registry.getProviderAuthStatus(id).configured,
-      modelCount: all.filter((model) => model.provider === id).length,
-      authMethods: [
-        { id: "api_key", name: "API Key" },
-        ...(oauth.has(id) ? [{ id: "oauth", name: "OAuth 登录" }] : []),
-      ],
-    }));
+    const runtime = this.resources.modelRuntime;
+    return [...runtime.getProviders()]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((provider) => ({
+        id: provider.id,
+        name: provider.name || provider.id,
+        authenticated: runtime.getProviderAuthStatus(provider.id).configured,
+        modelCount: runtime.getModels(provider.id).length,
+        authMethods: [
+          ...(provider.auth.apiKey?.login ? [{ id: "api_key", name: provider.auth.apiKey.name || "API Key" }] : []),
+          ...(provider.auth.oauth ? [{ id: "oauth", name: provider.auth.oauth.loginLabel || provider.auth.oauth.name || "OAuth 登录" }] : []),
+        ],
+      }));
   }
 
   async readConfig(): Promise<string> {
@@ -75,12 +72,12 @@ export class ModelManager {
 
     await mkdir(this.resources.agentDir, { recursive: true });
     await this.atomicWrite(content);
-    this.resources.modelRegistry.refresh();
+    await this.resources.modelRegistry.refresh({ allowNetwork: false });
     const validationError = this.resources.modelRegistry.getError();
     if (validationError) {
       if (previous === undefined) await rm(this.configPath, { force: true });
       else await this.atomicWrite(previous);
-      this.resources.modelRegistry.refresh();
+      await this.resources.modelRegistry.refresh({ allowNetwork: false });
       throw new Error(`models.json 配置无效：${validationError}`);
     }
   }

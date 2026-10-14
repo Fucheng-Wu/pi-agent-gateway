@@ -19,7 +19,7 @@ const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be between 1 and 65535");
 
-const resources = createSharedResources(workspace);
+const resources = await createSharedResources(workspace);
 const models = new ModelManager(resources);
 const pool = new SessionPool(5);
 const clients = new Set<WebSocket>();
@@ -213,7 +213,7 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
     }
     case "set_thinking_level": {
       const active = await getSession(requireText(message.sessionId, "sessionId", 128));
-      const allowed: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+      const allowed: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
       if (!allowed.includes(message.level)) throw new Error("思考强度无效");
       active.session.setThinkingLevel(message.level);
       broadcast({ type: "session_event", sessionId: active.id, event: {

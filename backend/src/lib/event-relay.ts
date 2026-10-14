@@ -1,4 +1,4 @@
-import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentUiEvent, ChatMessage } from "../../../shared/types.js";
 import { contextUsageFromSession, convertMessages, titleFromMessages } from "./message-converter.js";
 import type { ActiveSession } from "./types.js";

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { createAgentSession, SessionManager, type SessionInfo } from "@mariozechner/pi-coding-agent";
+import { createAgentSession, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { contextUsageFromSession } from "./message-converter.js";
 import type { SharedResources } from "./shared-resources.js";
 import type { ActiveSession } from "./types.js";
@@ -20,8 +20,7 @@ export async function createSession(resources: SharedResources): Promise<ActiveS
     cwd: resources.cwd,
     agentDir: resources.agentDir,
     sessionManager: manager,
-    authStorage: resources.authStorage,
-    modelRegistry: resources.modelRegistry,
+    modelRuntime: resources.modelRuntime,
     settingsManager: resources.settingsManager,
   });
   const now = new Date().toISOString();
@@ -41,8 +40,7 @@ export async function resumeSession(resources: SharedResources, info: SessionInf
     cwd: resources.cwd,
     agentDir: resources.agentDir,
     sessionManager: manager,
-    authStorage: resources.authStorage,
-    modelRegistry: resources.modelRegistry,
+    modelRuntime: resources.modelRuntime,
     settingsManager: resources.settingsManager,
   });
   return {

@@ -1,5 +1,5 @@
 /** Messages exchanged over /ws. Every command can carry a requestId for error correlation. */
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface SessionSummary {
   id: string;
