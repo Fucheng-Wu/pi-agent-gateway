@@ -3,11 +3,17 @@ export type {
   ChatMessage,
   ClientMessage,
   ContextUsage,
+  FeatureSettings,
+  McpConfigInfo,
   ModelInfo,
+  PluginInfo,
   ProviderInfo,
   ServerMessage,
   SessionSnapshot,
   SessionSummary,
+  SkillInfo,
+  SubagentProfileInfo,
+  SubagentSettingsInfo,
   ThinkingLevel,
   ToolCall
 } from '../../shared/types'

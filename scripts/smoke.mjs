@@ -44,6 +44,11 @@ try {
   await request({ type: 'list_models' }, 'models')
   await request({ type: 'list_providers' }, 'providers')
   await request({ type: 'get_models_config' }, 'models_config')
+  const featureSettings = await request({ type: 'get_feature_settings' }, 'feature_settings')
+  if (!Array.isArray(featureSettings.settings?.skills)) throw new Error('Skills settings missing')
+  if (!Array.isArray(featureSettings.settings?.plugins)) throw new Error('Plugins settings missing')
+  if (!Array.isArray(featureSettings.settings?.subagents?.profiles)) throw new Error('Subagent settings missing')
+  if (typeof featureSettings.settings?.mcp?.content !== 'string') throw new Error('MCP settings missing')
 
   const created = await request({ type: 'create_session' }, 'session_created')
   const sessionId = created.session.summary.id

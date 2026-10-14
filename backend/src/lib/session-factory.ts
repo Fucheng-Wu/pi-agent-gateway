@@ -16,12 +16,14 @@ export async function listStoredSessions(resources: SharedResources): Promise<Se
 
 export async function createSession(resources: SharedResources): Promise<ActiveSession> {
   const manager = SessionManager.create(resources.cwd, sessionDir(resources));
+  const resourceLoader = await resources.features.createResourceLoader();
   const { session } = await createAgentSession({
     cwd: resources.cwd,
     agentDir: resources.agentDir,
     sessionManager: manager,
     modelRuntime: resources.modelRuntime,
     settingsManager: resources.settingsManager,
+    resourceLoader,
   });
   const now = new Date().toISOString();
   return {
@@ -36,12 +38,14 @@ export async function createSession(resources: SharedResources): Promise<ActiveS
 
 export async function resumeSession(resources: SharedResources, info: SessionInfo): Promise<ActiveSession> {
   const manager = SessionManager.open(info.path, sessionDir(resources), resources.cwd);
+  const resourceLoader = await resources.features.createResourceLoader();
   const { session } = await createAgentSession({
     cwd: resources.cwd,
     agentDir: resources.agentDir,
     sessionManager: manager,
     modelRuntime: resources.modelRuntime,
     settingsManager: resources.settingsManager,
+    resourceLoader,
   });
   return {
     id: session.sessionId,

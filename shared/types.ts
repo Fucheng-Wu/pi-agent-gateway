@@ -49,6 +49,52 @@ export interface ProviderInfo {
   modelCount?: number;
 }
 
+export interface SkillInfo {
+  name: string;
+  description: string;
+  filePath: string;
+  scope: "global" | "project" | "package";
+  modelInvocable: boolean;
+}
+
+export interface PluginInfo {
+  source: string;
+  scope: "global" | "project";
+  installed: boolean;
+  installedPath?: string;
+  filtered: boolean;
+  enabled: boolean;
+}
+
+export interface SubagentProfileInfo {
+  id: "general-purpose" | "explore" | "plan";
+  name: string;
+  description: string;
+  tools: string[];
+  enabled: boolean;
+}
+
+export interface SubagentSettingsInfo {
+  enabled: boolean;
+  maxConcurrent: number;
+  active: number;
+  profiles: SubagentProfileInfo[];
+}
+
+export interface McpConfigInfo {
+  path: string;
+  content: string;
+  serverCount: number;
+  enabledServerCount: number;
+}
+
+export interface FeatureSettings {
+  skills: SkillInfo[];
+  plugins: PluginInfo[];
+  subagents: SubagentSettingsInfo;
+  mcp: McpConfigInfo;
+}
+
 export interface SessionSnapshot {
   summary: SessionSummary;
   messages: ChatMessage[];
@@ -88,6 +134,13 @@ export type ClientMessage = CommandBase & (
   | { type: "provider_login"; providerId: string; methodId?: string }
   | { type: "auth_response"; challengeId: string; value: string }
   | { type: "auth_cancel"; challengeId: string }
+  | { type: "get_feature_settings" }
+  | { type: "set_skill_enabled"; filePath: string; enabled: boolean }
+  | { type: "plugin_action"; action: "install" | "remove" | "update"; source: string; scope?: "global" | "project" }
+  | { type: "set_plugin_enabled"; source: string; scope: "global" | "project"; enabled: boolean }
+  | { type: "set_subagent_settings"; enabled?: boolean; maxConcurrent?: number }
+  | { type: "set_subagent_profile_enabled"; profileId: SubagentProfileInfo["id"]; enabled: boolean }
+  | { type: "save_mcp_config"; content: string }
 );
 
 export type ServerMessage = (
@@ -103,5 +156,7 @@ export type ServerMessage = (
   | { type: "providers"; providers: ProviderInfo[] }
   | { type: "auth_challenge"; challengeId: string; providerId: string; prompt: string; mode: "input" | "select" | "confirm"; options?: string[]; placeholder?: string; allowEmpty?: boolean }
   | { type: "auth_status"; providerId: string; status: "started" | "complete" | "cancelled" | "error"; message?: string; url?: string }
+  | { type: "feature_settings"; settings: FeatureSettings }
+  | { type: "feature_action_complete"; category: "skills" | "plugins" | "subagents" | "mcp"; settings: FeatureSettings }
   | { type: "error"; message: string; code?: string; sessionId?: string }
 ) & { requestId?: string };

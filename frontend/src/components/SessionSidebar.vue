@@ -5,7 +5,7 @@ import { useSessionPool } from '@/stores/session-pool'
 import type { ConnectionState, SessionSummary } from '@/types'
 
 defineProps<{ connection: ConnectionState; mobileOpen: boolean }>()
-const emit = defineEmits<{ close: []; config: []; providers: [] }>()
+const emit = defineEmits<{ close: []; settings: []; providers: [] }>()
 const store = useSessionPool()
 const confirmId = ref<string | null>(null)
 
@@ -65,7 +65,7 @@ function timeLabel(summary: SessionSummary) {
 
     <div class="border-t border-white/[.075] px-3 py-3">
       <button type="button" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs text-slate-400 transition hover:bg-white/[.055] hover:text-slate-200" @click="emit('providers'); emit('close')"><Bolt :size="15" class="text-amber-300" /> Provider 快捷配置 <ArrowUpRight :size="13" class="ml-auto" /></button>
-      <button type="button" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs text-slate-400 transition hover:bg-white/[.055] hover:text-slate-200" @click="emit('config'); emit('close')"><Settings2 :size="15" /> 编辑 models.json <ArrowUpRight :size="13" class="ml-auto" /></button>
+      <button type="button" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs text-slate-400 transition hover:bg-white/[.055] hover:text-slate-200" @click="emit('settings'); emit('close')"><Settings2 :size="15" /> 设置 <ArrowUpRight :size="13" class="ml-auto" /></button>
       <div class="mx-1 mt-3 flex items-center gap-2 border-t border-white/[.07] px-2 pt-3 text-[11px] text-slate-500">
         <Wifi v-if="connection === 'connected'" :size="13" class="text-emerald-400" /><WifiOff v-else :size="13" class="text-amber-400" />
         <span>{{ connection === 'connected' ? '已连接' : connection === 'reconnecting' ? '正在重连…' : connection === 'connecting' ? '连接中…' : '未连接' }}</span>

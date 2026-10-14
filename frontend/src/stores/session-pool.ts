@@ -1,8 +1,8 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type {
-  AgentUiEvent, ChatMessage, ClientMessage, ModelInfo, ProviderInfo, ServerMessage,
-  SessionSnapshot, SessionSummary, SessionUiState, ThinkingLevel, ToolCall
+  AgentUiEvent, ChatMessage, ClientMessage, FeatureSettings, ModelInfo, ProviderInfo, ServerMessage,
+  SessionSnapshot, SessionSummary, SessionUiState, SubagentProfileInfo, ThinkingLevel, ToolCall
 } from '@/types'
 
 type Sender = (message: ClientMessage) => boolean
@@ -37,6 +37,9 @@ export const useSessionPool = defineStore('session-pool', () => {
   let savingContent = ''
   const authChallenge = ref<AuthChallenge | null>(null)
   const authStatus = ref<AuthStatus | null>(null)
+  const featureSettings = ref<FeatureSettings | null>(null)
+  const featureSettingsLoading = ref(false)
+  const featureAction = ref<string | null>(null)
   const notice = ref<{ id: string; text: string; kind: 'error' | 'success' } | null>(null)
   const pendingEvents = new Map<string, AgentUiEvent[]>()
   const loadingSessions = new Set<string>()
@@ -84,6 +87,8 @@ export const useSessionPool = defineStore('session-pool', () => {
     loadingSessions.clear()
     loadRevisions.clear()
     configSaving.value = false
+    featureSettingsLoading.value = false
+    featureAction.value = null
   }
   function selectSession(sessionId: string) {
     activeSessionId.value = sessionId
@@ -122,6 +127,42 @@ export const useSessionPool = defineStore('session-pool', () => {
   function cancelAuth(challengeId: string) {
     if (!dispatch({ type: 'auth_cancel', challengeId })) return false
     authChallenge.value = null
+    return true
+  }
+
+  function refreshFeatureSettings() {
+    featureSettingsLoading.value = true
+    if (!dispatch({ type: 'get_feature_settings' })) { featureSettingsLoading.value = false; return false }
+    return true
+  }
+  function setSkillEnabled(filePath: string, enabled: boolean) {
+    featureAction.value = `skill:${filePath}`
+    if (!dispatch({ type: 'set_skill_enabled', filePath, enabled })) { featureAction.value = null; return false }
+    return true
+  }
+  function runPluginAction(action: 'install' | 'remove' | 'update', source: string, scope: 'global' | 'project' = 'global') {
+    featureAction.value = `plugin:${action}:${source}`
+    if (!dispatch({ type: 'plugin_action', action, source, scope })) { featureAction.value = null; return false }
+    return true
+  }
+  function setPluginEnabled(source: string, scope: 'global' | 'project', enabled: boolean) {
+    featureAction.value = `plugin:toggle:${scope}:${source}`
+    if (!dispatch({ type: 'set_plugin_enabled', source, scope, enabled })) { featureAction.value = null; return false }
+    return true
+  }
+  function setSubagentSettings(patch: { enabled?: boolean; maxConcurrent?: number }) {
+    featureAction.value = 'subagents:settings'
+    if (!dispatch({ type: 'set_subagent_settings', ...patch })) { featureAction.value = null; return false }
+    return true
+  }
+  function setSubagentProfileEnabled(profileId: SubagentProfileInfo['id'], enabled: boolean) {
+    featureAction.value = `subagents:${profileId}`
+    if (!dispatch({ type: 'set_subagent_profile_enabled', profileId, enabled })) { featureAction.value = null; return false }
+    return true
+  }
+  function saveMcpConfig(content: string) {
+    featureAction.value = 'mcp:save'
+    if (!dispatch({ type: 'save_mcp_config', content })) { featureAction.value = null; return false }
     return true
   }
 
@@ -285,8 +326,20 @@ export const useSessionPool = defineStore('session-pool', () => {
         if (message.status === 'complete') { authChallenge.value = null; refreshProviders(); refreshModels(); tell(message.message || '认证已完成', 'success') }
         else if (message.status === 'error') tell(message.message || '认证失败')
         break
+      case 'feature_settings':
+        featureSettings.value = message.settings
+        featureSettingsLoading.value = false
+        break
+      case 'feature_action_complete':
+        featureSettings.value = message.settings
+        featureSettingsLoading.value = false
+        featureAction.value = null
+        tell(`${({ skills: '技能', plugins: '插件', subagents: '子代理', mcp: 'MCP' } as const)[message.category]}设置已更新`, 'success')
+        break
       case 'error':
         configSaving.value = false
+        featureSettingsLoading.value = false
+        featureAction.value = null
         if (message.sessionId) loadingSessions.delete(message.sessionId)
         tell(message.message)
         break
@@ -296,9 +349,12 @@ export const useSessionPool = defineStore('session-pool', () => {
 
   return {
     sessions, sortedSessions, sessionStates, activeSessionId, activeSession, models, providers,
-    modelsConfig, configLoaded, configSaving, authChallenge, authStatus, notice, setSender,
+    modelsConfig, configLoaded, configSaving, authChallenge, authStatus,
+    featureSettings, featureSettingsLoading, featureAction, notice, setSender,
     refreshSessions, refreshModels, refreshProviders, fetchModelsConfig, saveModelsConfig,
     createSession, loadSession, selectSession, deleteSession, prompt, abort, setModel, setThinkingLevel,
-    login, submitAuth, cancelAuth, handleServerMessage, onTransportDisconnected
+    login, submitAuth, cancelAuth, refreshFeatureSettings, setSkillEnabled, runPluginAction, setPluginEnabled,
+    setSubagentSettings, setSubagentProfileEnabled, saveMcpConfig,
+    handleServerMessage, onTransportDisconnected
   }
 })

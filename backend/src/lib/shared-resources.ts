@@ -5,11 +5,13 @@ import {
   ModelRuntime,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { FeatureManager } from "./feature-manager.js";
 
 export interface SharedResources {
   modelRuntime: ModelRuntime;
   modelRegistry: ModelRegistry;
   settingsManager: SettingsManager;
+  features: FeatureManager;
   agentDir: string;
   cwd: string;
 }
@@ -22,5 +24,6 @@ export async function createSharedResources(cwd: string): Promise<SharedResource
   });
   const modelRegistry = new ModelRegistry(modelRuntime);
   const settingsManager = SettingsManager.create(cwd, agentDir);
-  return { modelRuntime, modelRegistry, settingsManager, agentDir, cwd };
+  const features = new FeatureManager(cwd, agentDir, settingsManager, modelRuntime);
+  return { modelRuntime, modelRegistry, settingsManager, features, agentDir, cwd };
 }

@@ -38,6 +38,28 @@ function notifyCatalogChanged(): void {
   broadcast({ type: "providers", providers: models.getProvidersInfo() });
 }
 
+async function reloadIdleSessions(): Promise<void> {
+  const results = await Promise.allSettled(
+    pool.values()
+      .filter((active) => active.session.isIdle && !active.promptTask)
+      .map((active) => active.session.reload()),
+  );
+  for (const result of results) {
+    if (result.status === "rejected") console.error("Failed to reload session resources", result.reason);
+  }
+}
+
+async function sendFeatureSettings(
+  ws: WebSocket,
+  type: "feature_settings" | "feature_action_complete",
+  requestId?: string,
+  category?: "skills" | "plugins" | "subagents" | "mcp",
+): Promise<void> {
+  const settings = await resources.features.getSettings();
+  if (type === "feature_settings") send(ws, { type, settings, requestId });
+  else if (category) send(ws, { type, category, settings, requestId });
+}
+
 function attach(active: ActiveSession): ActiveSession {
   pool.add(active);
   attachEventRelay(
@@ -238,6 +260,46 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
       auth.respond(requireText(message.challengeId, "challengeId", 128), requireString(message.value, "value"));
       return;
     case "auth_cancel": auth.cancel(requireText(message.challengeId, "challengeId", 128)); return;
+    case "get_feature_settings":
+      await sendFeatureSettings(ws, "feature_settings", requestId);
+      return;
+    case "set_skill_enabled":
+      if (typeof message.enabled !== "boolean") throw new Error("enabled 必须是布尔值");
+      await resources.features.setSkillEnabled(requireText(message.filePath, "filePath", 4_096), message.enabled);
+      await reloadIdleSessions();
+      await sendFeatureSettings(ws, "feature_action_complete", requestId, "skills");
+      return;
+    case "plugin_action":
+      if (!["install", "remove", "update"].includes(message.action)) throw new Error("插件操作无效");
+      if (message.scope !== undefined && message.scope !== "global" && message.scope !== "project") throw new Error("插件作用域无效");
+      await resources.features.runPluginAction(message.action, requireText(message.source, "source", 500), message.scope);
+      await reloadIdleSessions();
+      await sendFeatureSettings(ws, "feature_action_complete", requestId, "plugins");
+      return;
+    case "set_plugin_enabled":
+      if (typeof message.enabled !== "boolean") throw new Error("enabled 必须是布尔值");
+      if (message.scope !== "global" && message.scope !== "project") throw new Error("插件作用域无效");
+      await resources.features.setPluginEnabled(requireText(message.source, "source", 500), message.scope, message.enabled);
+      await reloadIdleSessions();
+      await sendFeatureSettings(ws, "feature_action_complete", requestId, "plugins");
+      return;
+    case "set_subagent_settings":
+      if (message.enabled !== undefined && typeof message.enabled !== "boolean") throw new Error("enabled 必须是布尔值");
+      await resources.features.setSubagentSettings({ enabled: message.enabled, maxConcurrent: message.maxConcurrent });
+      await reloadIdleSessions();
+      await sendFeatureSettings(ws, "feature_action_complete", requestId, "subagents");
+      return;
+    case "set_subagent_profile_enabled":
+      if (typeof message.enabled !== "boolean") throw new Error("enabled 必须是布尔值");
+      await resources.features.setSubagentProfileEnabled(message.profileId, message.enabled);
+      await reloadIdleSessions();
+      await sendFeatureSettings(ws, "feature_action_complete", requestId, "subagents");
+      return;
+    case "save_mcp_config":
+      await resources.features.saveMcpConfig(requireText(message.content, "content", 2_000_000));
+      await reloadIdleSessions();
+      await sendFeatureSettings(ws, "feature_action_complete", requestId, "mcp");
+      return;
     default: throw new Error("不支持的消息类型");
   }
 }
