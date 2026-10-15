@@ -3,7 +3,7 @@ import type { AgentUiEvent, ChatMessage } from "../../../shared/types.js";
 import { contextUsageFromSession, convertMessages, titleFromMessages } from "./message-converter.js";
 import type { ActiveSession } from "./types.js";
 
-type SendEvent = (sessionId: string, event: AgentUiEvent) => void;
+type SendEvent = (event: AgentUiEvent) => void;
 
 function resultText(value: unknown): string {
   if (typeof value === "string") return value;
@@ -36,18 +36,19 @@ export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSna
     try {
       switch (event.type) {
         case "agent_start":
-          send(active.id, { type: "turn_started" });
+          send({ type: "agent_start", sessionId: active.id });
           break;
         case "message_update":
           if (event.assistantMessageEvent.type === "text_delta") {
-            send(active.id, { type: "text_delta", delta: event.assistantMessageEvent.delta });
+            send({ type: "text_delta", sessionId: active.id, delta: event.assistantMessageEvent.delta });
           } else if (event.assistantMessageEvent.type === "thinking_delta") {
-            send(active.id, { type: "thinking_delta", delta: event.assistantMessageEvent.delta });
+            send({ type: "thinking_delta", sessionId: active.id, delta: event.assistantMessageEvent.delta });
           }
           break;
         case "tool_execution_start":
-          send(active.id, {
-            type: "tool_started",
+          send({
+            type: "tool_start",
+            sessionId: active.id,
             tool: {
               id: event.toolCallId,
               name: event.toolName,
@@ -57,15 +58,17 @@ export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSna
           });
           break;
         case "tool_execution_update":
-          send(active.id, {
-            type: "tool_updated",
+          send({
+            type: "tool_update",
+            sessionId: active.id,
             toolCallId: event.toolCallId,
             output: resultText(event.partialResult),
           });
           break;
         case "tool_execution_end":
-          send(active.id, {
-            type: "tool_finished",
+          send({
+            type: "tool_end",
+            sessionId: active.id,
             toolCallId: event.toolCallId,
             output: resultText(event.result),
             isError: event.isError,
@@ -74,7 +77,7 @@ export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSna
         case "message_end": {
           const message = finishedMessage(active, event.message);
           if (!message) break;
-          send(active.id, { type: "message_end", message });
+          send({ type: "message_end", sessionId: active.id, message });
           if (message.role === "user" && active.summary.title === "新对话") {
             const title = titleFromMessages([message]);
             if (title !== "新对话") {
@@ -84,11 +87,11 @@ export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSna
           }
           active.summary.updatedAt = new Date().toISOString();
           active.summary.messageCount = active.session.messages.length;
-          send(active.id, { type: "session_updated", summary: active.summary });
+          send({ type: "session_updated", sessionId: active.id, summary: active.summary });
           break;
         }
         case "thinking_level_changed":
-          send(active.id, { type: "session_updated", thinkingLevel: active.session.thinkingLevel });
+          send({ type: "session_updated", sessionId: active.id, thinkingLevel: active.session.thinkingLevel });
           break;
         case "compaction_end":
           // Compaction can replace/prune messages, invalidating index-based UI IDs.
@@ -96,7 +99,7 @@ export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSna
           break;
         case "agent_end": {
           active.contextUsage = contextUsageFromSession(active.session);
-          send(active.id, { type: "session_updated", summary: active.summary, contextUsage: active.contextUsage });
+          send({ type: "session_updated", sessionId: active.id, summary: active.summary, contextUsage: active.contextUsage });
           break;
         }
       }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   createAgentSession,
   createCodemodeExtension,
@@ -38,6 +38,8 @@ const SUBAGENT_PROFILES: Omit<SubagentProfileInfo, "enabled">[] = [
     name: "通用执行",
     description: "独立完成分析、编码和验证任务。",
     tools: ["read", "grep", "find", "ls", "bash", "edit", "write"],
+    skills: [],
+    extensions: [],
     systemPrompt: "你是独立执行子代理。完成委派任务，必要时修改代码并验证，最后报告结果与关键文件。",
     builtIn: true,
     scope: "builtin",
@@ -47,6 +49,8 @@ const SUBAGENT_PROFILES: Omit<SubagentProfileInfo, "enabled">[] = [
     name: "代码探索",
     description: "只读检索项目并汇总结论。",
     tools: ["read", "grep", "find", "ls"],
+    skills: [],
+    extensions: [],
     systemPrompt: "你是只读代码探索子代理。检索相关实现，给出带文件依据的简洁结论，不修改文件。",
     builtIn: true,
     scope: "builtin",
@@ -56,6 +60,8 @@ const SUBAGENT_PROFILES: Omit<SubagentProfileInfo, "enabled">[] = [
     name: "方案规划",
     description: "只读分析需求、依赖和实施步骤。",
     tools: ["read", "grep", "find", "ls"],
+    skills: [],
+    extensions: [],
     systemPrompt: "你是规划子代理。分析需求和现有代码，给出可执行的实施方案、风险与验证步骤，不修改文件。",
     builtIn: true,
     scope: "builtin",
@@ -64,7 +70,7 @@ const SUBAGENT_PROFILES: Omit<SubagentProfileInfo, "enabled">[] = [
 
 const PROFILE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
-const ALLOWED_SUBAGENT_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write"]);
+const TOOL_PATTERN = /^(?:[+-])?[A-Za-z0-9_][A-Za-z0-9_.:*+-]{0,127}$/;
 
 interface StoredSubagentSettings {
   builtInEnabled?: boolean;
@@ -93,22 +99,34 @@ function frontmatterValue(source: string, key: string): unknown {
   catch { return value.replace(/^['"]|['"]$/g, ""); }
 }
 
+function stringList(value: unknown, predicate: (value: string) => boolean = () => true): string[] {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.replace(/^\[|\]$/g, "").split(",").map((item) => item.trim().replace(/^['"]|['"]$/g, ""))
+      : [];
+  return [...new Set(values.filter((item): item is string => typeof item === "string" && predicate(item)))];
+}
+
+function pathWithin(root: string, candidate: string): boolean {
+  const path = relative(resolve(root), resolve(candidate));
+  return path !== "" && !path.startsWith("..") && !isAbsolute(path);
+}
+
 function parseCustomProfile(content: string, filePath: string, scope: "global" | "project"): Omit<SubagentProfileInfo, "enabled"> | null {
   const block = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/);
   if (!block) return null;
   const id = String(frontmatterValue(block[1], "name") ?? basename(filePath, ".md")).trim();
   if (!PROFILE_ID.test(id)) return null;
   const rawTools = frontmatterValue(block[1], "tools");
-  const tools = Array.isArray(rawTools)
-    ? rawTools.filter((tool): tool is string => typeof tool === "string" && ALLOWED_SUBAGENT_TOOLS.has(tool))
-    : typeof rawTools === "string"
-      ? rawTools.replace(/^\[|\]$/g, "").split(",").map((tool) => tool.trim()).filter((tool) => ALLOWED_SUBAGENT_TOOLS.has(tool))
-      : ["read", "grep", "find", "ls"];
+  const tools = rawTools === undefined ? ["read", "grep", "find", "ls"] : stringList(rawTools, (tool) => TOOL_PATTERN.test(tool));
   return {
     id,
     name: String(frontmatterValue(block[1], "display_name") ?? id),
     description: String(frontmatterValue(block[1], "description") ?? id),
     tools: [...new Set(tools)],
+    skills: stringList(frontmatterValue(block[1], "skills"), (skill) => skill === "*" || SKILL_NAME.test(skill)),
+    extensions: stringList(frontmatterValue(block[1], "extensions"), (extension) => extension.length > 0 && extension.length <= 500),
     systemPrompt: block[2].trim(),
     builtIn: false,
     scope,
@@ -164,6 +182,7 @@ export class FeatureManager {
     private readonly agentDir: string,
     private readonly settingsManager: SettingsManager,
     private readonly modelRuntime: ModelRuntime,
+    private readonly backendDir: string,
   ) {
     this.packageManager = new DefaultPackageManager({
       cwd,
@@ -174,7 +193,7 @@ export class FeatureManager {
   }
 
   private get subagentSettingsPath(): string {
-    return join(this.agentDir, "agents", "settings.json");
+    return join(this.projectAgentsDir, "settings.json");
   }
 
   private get mcpConfigPath(): string {
@@ -186,7 +205,11 @@ export class FeatureManager {
   }
 
   private get projectAgentsDir(): string {
-    return join(this.cwd, ".pi", "agents");
+    return join(this.backendDir, "subagents");
+  }
+
+  private get projectSkillsDir(): string {
+    return join(this.backendDir, "skills");
   }
 
   private async atomicWrite(path: string, content: string): Promise<void> {
@@ -226,9 +249,20 @@ export class FeatureManager {
         throw error;
       }
       for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) continue;
-        const filePath = join(directory, entry.name);
-        const profile = parseCustomProfile(await readFile(filePath, "utf8"), filePath, scope);
+        if (entry.name.startsWith("_") || entry.name.toLowerCase() === "readme.md") continue;
+        const filePath = entry.isDirectory()
+          ? join(directory, entry.name, "agent.md")
+          : entry.isFile() && entry.name.toLowerCase().endsWith(".md")
+            ? join(directory, entry.name)
+            : undefined;
+        if (!filePath) continue;
+        let content: string;
+        try { content = await readFile(filePath, "utf8"); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+        const profile = parseCustomProfile(content, filePath, scope);
         if (profile) profiles.set(profile.id.toLowerCase(), profile);
       }
     }
@@ -281,6 +315,8 @@ export class FeatureManager {
     description: string;
     systemPrompt: string;
     tools: string[];
+    skills?: string[];
+    extensions?: string[];
     scope: "global" | "project";
   }): Promise<void> {
     const id = input.id.trim();
@@ -292,16 +328,20 @@ export class FeatureManager {
     const systemPrompt = input.systemPrompt.trim();
     if (!systemPrompt) throw new Error("子代理系统提示不能为空");
     if (name.length > 100 || description.length > 500 || systemPrompt.length > 50_000) throw new Error("子代理字段长度超出限制");
-    const tools = [...new Set(input.tools.filter((tool) => ALLOWED_SUBAGENT_TOOLS.has(tool)))];
-    const directory = input.scope === "project" ? this.projectAgentsDir : this.globalAgentsDir;
+    const tools = [...new Set(input.tools.filter((tool) => TOOL_PATTERN.test(tool)))];
+    const skills = [...new Set((input.skills ?? []).filter((skill) => skill === "*" || SKILL_NAME.test(skill)))];
+    const extensions = [...new Set((input.extensions ?? []).filter((extension) => extension.length > 0 && extension.length <= 500))];
+    const directory = input.scope === "project" ? join(this.projectAgentsDir, id) : this.globalAgentsDir;
     await mkdir(directory, { recursive: true });
-    const filePath = join(directory, `${id}.md`);
+    const filePath = input.scope === "project" ? join(directory, "agent.md") : join(directory, `${id}.md`);
     const body = [
       "---",
       `name: ${id}`,
       `display_name: ${JSON.stringify(name)}`,
       `description: ${JSON.stringify(description)}`,
       `tools: ${JSON.stringify(tools)}`,
+      `skills: ${JSON.stringify(skills)}`,
+      `extensions: ${JSON.stringify(extensions)}`,
       "enabled: true",
       "---",
       "",
@@ -316,11 +356,24 @@ export class FeatureManager {
     if (!profile || profile.builtIn || !profile.filePath) throw new Error("只能删除自定义子代理");
     const allowedRoots = [resolve(this.globalAgentsDir), resolve(this.projectAgentsDir)];
     const target = resolve(await realpath(profile.filePath));
-    if (!allowedRoots.some((root) => dirname(target) === root)) throw new Error("子代理文件不在允许的目录中");
+    if (!allowedRoots.some((root) => pathWithin(root, target))) throw new Error("子代理文件不在允许的目录中");
     await rm(target);
     const stored = await this.readStoredSubagentSettings();
     const disabled = new Set(Array.isArray(stored.disabledBuiltIns) ? stored.disabledBuiltIns : []);
     if (disabled.delete(profileId)) await this.writeStoredSubagentSettings({ disabledBuiltIns: [...disabled].sort() });
+  }
+
+  private profileExtensionPaths(profile: SubagentProfileInfo): string[] {
+    if (!profile.filePath || profile.extensions.length === 0) return [];
+    const base = resolve(dirname(profile.filePath));
+    return profile.extensions.map((extension) => {
+      const target = resolve(base, extension);
+      const path = relative(base, target);
+      if (!path || path.startsWith("..") || isAbsolute(path)) {
+        throw new Error(`子代理 ${profile.id} 的扩展必须位于配置文件目录内：${extension}`);
+      }
+      return target;
+    });
   }
 
   private createSubagentExtension(): ExtensionFactory {
@@ -343,7 +396,7 @@ export class FeatureManager {
         }),
         execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
           const latest = await this.getSubagentSettings();
-          if (!latest.enabled) throw new Error("内置子代理已关闭");
+          if (!latest.enabled) throw new Error("子代理功能已关闭");
           const profile = latest.profiles.find((item) => item.id === params.profile && item.enabled);
           if (!profile) throw new Error(`子代理角色不可用：${params.profile}`);
           if (!ctx.model) throw new Error("当前会话尚未选择模型");
@@ -354,11 +407,18 @@ export class FeatureManager {
           let childSession: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
           let abort: (() => void) | undefined;
           try {
+            const allowedSkills = new Set(profile.skills);
             const childLoader = new DefaultResourceLoader({
               cwd: ctx.cwd,
               agentDir: this.agentDir,
               settingsManager: this.settingsManager,
               noExtensions: true,
+              additionalExtensionPaths: this.profileExtensionPaths(profile),
+              additionalSkillPaths: [this.projectSkillsDir],
+              skillsOverride: (current) => ({
+                skills: allowedSkills.has("*") ? current.skills : current.skills.filter((skill) => allowedSkills.has(skill.name)),
+                diagnostics: current.diagnostics,
+              }),
               systemPrompt: profile.systemPrompt,
             });
             await childLoader.reload();
@@ -407,6 +467,7 @@ export class FeatureManager {
       cwd: this.cwd,
       agentDir: this.agentDir,
       settingsManager: this.settingsManager,
+      additionalSkillPaths: [this.projectSkillsDir],
       extensionFactories: this.extensionFactories(),
     });
     await loader.reload();
@@ -418,6 +479,7 @@ export class FeatureManager {
       cwd: this.cwd,
       agentDir: this.agentDir,
       settingsManager: this.settingsManager,
+      additionalSkillPaths: [this.projectSkillsDir],
       noExtensions: true,
     });
     await loader.reload();
@@ -427,7 +489,11 @@ export class FeatureManager {
         name: skill.name,
         description: skill.description,
         filePath: skill.filePath,
-        scope: skill.sourceInfo.origin === "package" ? "package" as const : skill.sourceInfo.scope === "project" ? "project" as const : "global" as const,
+        scope: skill.sourceInfo.origin === "package"
+          ? "package" as const
+          : skill.sourceInfo.scope === "project" || pathWithin(this.projectSkillsDir, skill.filePath)
+            ? "project" as const
+            : "global" as const,
         modelInvocable: !skill.disableModelInvocation,
       }))
       .sort((left, right) => left.name.localeCompare(right.name));
@@ -446,7 +512,7 @@ export class FeatureManager {
     const instructions = input.instructions.trim();
     if (!description || !instructions) throw new Error("技能描述和指令不能为空");
     if (description.length > 500 || instructions.length > 100_000) throw new Error("技能内容长度超出限制");
-    const parent = input.scope === "project" ? join(this.cwd, ".pi", "skills") : join(this.agentDir, "skills");
+    const parent = input.scope === "project" ? this.projectSkillsDir : join(this.agentDir, "skills");
     const directory = join(parent, name);
     await mkdir(parent, { recursive: true });
     await mkdir(directory);

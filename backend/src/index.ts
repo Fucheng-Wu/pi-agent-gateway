@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { WebSocket, WebSocketServer } from "ws";
-import type { ClientMessage, ServerMessage, SessionSnapshot, SessionSummary, ThinkingLevel } from "../../shared/types.js";
+import { PROTOCOL_VERSION, type AgentUiEvent, type ClientMessage, type ServerMessage, type SessionSnapshot, type SessionSummary, type ThinkingLevel } from "../../shared/types.js";
 import { WsAuthInteraction } from "./lib/auth-bridge.js";
 import { attachEventRelay } from "./lib/event-relay.js";
 import { contextUsageFromSession, convertMessages } from "./lib/message-converter.js";
@@ -23,6 +23,7 @@ const resources = await createSharedResources(workspace);
 const models = new ModelManager(resources);
 const pool = new SessionPool(5);
 const clients = new Set<WebSocket>();
+const initializedClients = new WeakSet<WebSocket>();
 const pendingLoads = new Map<string, Promise<ActiveSession>>();
 
 function send(ws: WebSocket, message: ServerMessage): void {
@@ -30,7 +31,13 @@ function send(ws: WebSocket, message: ServerMessage): void {
 }
 
 function broadcast(message: ServerMessage): void {
-  for (const ws of clients) send(ws, message);
+  for (const ws of clients) {
+    if (initializedClients.has(ws)) send(ws, message);
+  }
+}
+
+function broadcastEvent(event: AgentUiEvent): void {
+  broadcast(event);
 }
 
 function notifyCatalogChanged(): void {
@@ -64,7 +71,7 @@ function attach(active: ActiveSession): ActiveSession {
   pool.add(active);
   attachEventRelay(
     active,
-    (sessionId, event) => broadcast({ type: "session_event", sessionId, event }),
+    broadcastEvent,
     () => broadcast({ type: "session_state", session: snapshot(active) }),
   );
   return active;
@@ -158,16 +165,16 @@ function startPrompt(ws: WebSocket, active: ActiveSession, text: string, request
   const task = active.session.prompt(text)
     .then(() => {
       active.contextUsage = contextUsageFromSession(active.session);
-      broadcast({ type: "session_event", sessionId: active.id, event: {
-        type: "turn_finished", contextUsage: active.contextUsage, error: lastPromptError(active),
-      } });
+      broadcastEvent({
+        type: "agent_end", sessionId: active.id, contextUsage: active.contextUsage, error: lastPromptError(active),
+      });
     })
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       send(ws, { type: "error", message, sessionId: active.id, requestId });
-      broadcast({ type: "session_event", sessionId: active.id, event: {
-        type: "turn_finished", contextUsage: contextUsageFromSession(active.session), error: message,
-      } });
+      broadcastEvent({
+        type: "agent_end", sessionId: active.id, contextUsage: contextUsageFromSession(active.session), error: message,
+      });
     })
     .finally(() => { active.promptTask = undefined; });
   active.promptTask = task;
@@ -199,6 +206,23 @@ async function deleteSession(sessionId: string): Promise<void> {
 async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMessage): Promise<void> {
   const requestId = message.requestId;
   switch (message.type) {
+    case "init": {
+      if (message.protocolVersion !== PROTOCOL_VERSION) {
+        throw new Error(`协议版本不兼容：客户端 ${message.protocolVersion}，服务端 ${PROTOCOL_VERSION}`);
+      }
+      const [sessions, settings] = await Promise.all([listSessions(), resources.features.getSettings()]);
+      send(ws, {
+        type: "init",
+        protocolVersion: PROTOCOL_VERSION,
+        sessions,
+        models: models.getModelsInfo(),
+        providers: models.getProvidersInfo(),
+        settings,
+        requestId,
+      });
+      initializedClients.add(ws);
+      return;
+    }
     case "ping": send(ws, { type: "pong", requestId }); return;
     case "list_sessions": send(ws, { type: "sessions", sessions: await listSessions(), requestId }); return;
     case "create_session": {
@@ -233,9 +257,9 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
       if (!model) throw new Error("模型不存在");
       if (!resources.modelRegistry.hasConfiguredAuth(model)) throw new Error("请先配置此模型的 Provider 认证");
       await active.session.setModel(model);
-      broadcast({ type: "session_event", sessionId: active.id, event: {
-        type: "session_updated", model: { provider, id: modelId }, thinkingLevel: active.session.thinkingLevel as ThinkingLevel,
-      } });
+      broadcastEvent({
+        type: "session_updated", sessionId: active.id, model: { provider, id: modelId }, thinkingLevel: active.session.thinkingLevel as ThinkingLevel,
+      });
       return;
     }
     case "set_thinking_level": {
@@ -243,9 +267,9 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
       const allowed: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
       if (!allowed.includes(message.level)) throw new Error("思考强度无效");
       active.session.setThinkingLevel(message.level);
-      broadcast({ type: "session_event", sessionId: active.id, event: {
-        type: "session_updated", thinkingLevel: active.session.thinkingLevel as ThinkingLevel,
-      } });
+      broadcastEvent({
+        type: "session_updated", sessionId: active.id, thinkingLevel: active.session.thinkingLevel as ThinkingLevel,
+      });
       return;
     }
     case "list_models": send(ws, { type: "models", models: models.getModelsInfo(), requestId }); return;
@@ -328,12 +352,16 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
     case "create_subagent_profile":
       if (message.scope !== "global" && message.scope !== "project") throw new Error("子代理作用域无效");
       if (!Array.isArray(message.tools) || !message.tools.every((tool) => typeof tool === "string")) throw new Error("tools 必须是字符串数组");
+      if (message.skills !== undefined && (!Array.isArray(message.skills) || !message.skills.every((skill) => typeof skill === "string"))) throw new Error("skills 必须是字符串数组");
+      if (message.extensions !== undefined && (!Array.isArray(message.extensions) || !message.extensions.every((extension) => typeof extension === "string"))) throw new Error("extensions 必须是字符串数组");
       await resources.features.createSubagentProfile({
         id: requireText(message.id, "id", 64),
         name: requireText(message.name, "name", 100),
         description: requireText(message.description, "description", 500),
         systemPrompt: requireText(message.systemPrompt, "systemPrompt", 50_000),
         tools: message.tools,
+        skills: message.skills,
+        extensions: message.extensions,
         scope: message.scope,
       });
       await reloadIdleSessions();
@@ -390,6 +418,15 @@ wss.on("connection", (ws) => {
     try { message = parseClientMessage(data); }
     catch (error) {
       send(ws, { type: "error", code: "BAD_REQUEST", message: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    if (message.type !== "init" && !initializedClients.has(ws)) {
+      send(ws, {
+        type: "error",
+        code: "INIT_REQUIRED",
+        requestId: message.requestId,
+        message: `请先发送 init（protocolVersion: ${PROTOCOL_VERSION}）完成握手`,
+      });
       return;
     }
     void route(ws, auth, message).catch((error) => {

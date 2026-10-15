@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   getAgentDir,
   ModelRegistry,
@@ -14,9 +15,11 @@ export interface SharedResources {
   features: FeatureManager;
   agentDir: string;
   cwd: string;
+  backendDir: string;
 }
 
 export async function createSharedResources(cwd: string): Promise<SharedResources> {
+  const backendDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const agentDir = process.env.PI_AGENT_DIR || getAgentDir();
   const modelRuntime = await ModelRuntime.create({
     authPath: join(agentDir, "auth.json"),
@@ -24,6 +27,6 @@ export async function createSharedResources(cwd: string): Promise<SharedResource
   });
   const modelRegistry = new ModelRegistry(modelRuntime);
   const settingsManager = SettingsManager.create(cwd, agentDir);
-  const features = new FeatureManager(cwd, agentDir, settingsManager, modelRuntime);
-  return { modelRuntime, modelRegistry, settingsManager, features, agentDir, cwd };
+  const features = new FeatureManager(cwd, agentDir, settingsManager, modelRuntime, backendDir);
+  return { modelRuntime, modelRegistry, settingsManager, features, agentDir, cwd, backendDir };
 }

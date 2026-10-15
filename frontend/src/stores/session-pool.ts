@@ -4,6 +4,7 @@ import type {
   AgentUiEvent, ChatMessage, ClientMessage, FeatureSettings, ModelInfo, ProviderInfo, ServerMessage,
   SessionSnapshot, SessionSummary, SessionUiState, SubagentProfileInfo, ThinkingLevel, ToolCall
 } from '@/types'
+import { PROTOCOL_VERSION } from '@/types'
 
 type Sender = (message: ClientMessage) => boolean
 type AuthChallenge = Extract<ServerMessage, { type: 'auth_challenge' }>
@@ -66,6 +67,7 @@ export const useSessionPool = defineStore('session-pool', () => {
   }
 
   function refreshSessions() { return dispatch({ type: 'list_sessions' }) }
+  function initialize() { return dispatch({ type: 'init', protocolVersion: PROTOCOL_VERSION }) }
   function refreshModels() { return dispatch({ type: 'list_models' }) }
   function refreshProviders() { return dispatch({ type: 'list_providers' }) }
   function fetchModelsConfig() { configLoaded.value = false; return dispatch({ type: 'get_models_config' }) }
@@ -215,7 +217,7 @@ export const useSessionPool = defineStore('session-pool', () => {
 
   function applyEvent(state: SessionUiState, event: AgentUiEvent) {
     switch (event.type) {
-      case 'turn_started':
+      case 'agent_start':
         state.isStreaming = true
         break
       case 'text_delta':
@@ -226,17 +228,17 @@ export const useSessionPool = defineStore('session-pool', () => {
         state.isStreaming = true
         ensureAssistant(state).thinking = (ensureAssistant(state).thinking ?? '') + event.delta
         break
-      case 'tool_started':
+      case 'tool_start':
         state.isStreaming = true
         upsertTool(ensureAssistant(state), event.tool)
         break
-      case 'tool_updated':
-      case 'tool_finished': {
+      case 'tool_update':
+      case 'tool_end': {
         const message = ensureAssistant(state)
         const tool = message.tools?.find((item) => item.id === event.toolCallId)
         if (tool) {
           if (event.output !== undefined) tool.output = event.output
-          if (event.type === 'tool_finished') tool.status = event.isError ? 'error' : 'done'
+          if (event.type === 'tool_end') tool.status = event.isError ? 'error' : 'done'
         }
         break
       }
@@ -257,7 +259,7 @@ export const useSessionPool = defineStore('session-pool', () => {
         if (!state.messages.some((m) => m.id === incoming.id)) state.messages.push(incoming)
         break
       }
-      case 'turn_finished':
+      case 'agent_end':
         state.isStreaming = false
         state.streamMessageId = undefined
         if (event.contextUsage) state.contextUsage = event.contextUsage
@@ -306,6 +308,18 @@ export const useSessionPool = defineStore('session-pool', () => {
 
   function handleServerMessage(message: ServerMessage) {
     switch (message.type) {
+      case 'init': {
+        sessions.value = message.sessions
+        models.value = message.models
+        providers.value = message.providers
+        featureSettings.value = message.settings
+        featureSettingsLoading.value = false
+        const current = activeSessionId.value
+        if (current && message.sessions.some((session) => session.id === current)) loadSession(current)
+        else if (message.sessions.length) selectSession([...message.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0].id)
+        else activeSessionId.value = null
+        break
+      }
       case 'sessions':
         sessions.value = message.sessions
         if (activeSessionId.value && !message.sessions.some((s) => s.id === activeSessionId.value)) activeSessionId.value = null
@@ -328,13 +342,21 @@ export const useSessionPool = defineStore('session-pool', () => {
           if (sessions.value.length) selectSession(sortedSessions.value[0].id)
         }
         break
-      case 'session_event': {
+      case 'agent_start':
+      case 'text_delta':
+      case 'thinking_delta':
+      case 'tool_start':
+      case 'tool_update':
+      case 'tool_end':
+      case 'message_end':
+      case 'agent_end':
+      case 'session_updated': {
         revisions.set(message.sessionId, (revisions.get(message.sessionId) ?? 0) + 1)
         const state = sessionStates.value[message.sessionId]
-        if (state) applyEvent(state, message.event)
+        if (state) applyEvent(state, message)
         else {
           const backlog = pendingEvents.get(message.sessionId) ?? []
-          backlog.push(message.event)
+          backlog.push(message)
           if (backlog.length > 500) backlog.shift()
           pendingEvents.set(message.sessionId, backlog)
           if (!loadingSessions.has(message.sessionId)) loadSession(message.sessionId)
@@ -389,7 +411,7 @@ export const useSessionPool = defineStore('session-pool', () => {
     sessions, sortedSessions, sessionStates, activeSessionId, activeSession, models, providers,
     modelsConfig, configLoaded, configSaving, modelDiscovery, modelTest, authChallenge, authStatus,
     featureSettings, featureSettingsLoading, featureAction, notice, setSender,
-    refreshSessions, refreshModels, refreshProviders, fetchModelsConfig, saveModelsConfig, discoverProviderModels, testModelConfig,
+    initialize, refreshSessions, refreshModels, refreshProviders, fetchModelsConfig, saveModelsConfig, discoverProviderModels, testModelConfig,
     createSession, loadSession, selectSession, deleteSession, prompt, abort, setModel, setThinkingLevel,
     login, submitAuth, cancelAuth, refreshFeatureSettings, createSkill, setSkillEnabled, runPluginAction, setPluginEnabled,
     setSubagentSettings, setSubagentProfileEnabled, createSubagentProfile, deleteSubagentProfile, saveMcpConfig,

@@ -87,6 +87,10 @@ export interface SubagentProfileInfo {
   name: string;
   description: string;
   tools: string[];
+  /** Skill names available to this subagent. Use ["*"] to allow every discovered skill. */
+  skills: string[];
+  /** Extension modules, resolved relative to the profile file, that register custom tools. */
+  extensions: string[];
   enabled: boolean;
   systemPrompt: string;
   builtIn: boolean;
@@ -124,20 +128,28 @@ export interface SessionSnapshot {
   contextUsage?: ContextUsage;
 }
 
+export const PROTOCOL_VERSION = 1 as const;
+
+/**
+ * Agent events are top-level WebSocket messages. Keeping sessionId on every
+ * event lets clients route interleaved output from multiple sessions without
+ * unpacking a nested event envelope.
+ */
 export type AgentUiEvent =
-  | { type: "turn_started" }
-  | { type: "text_delta"; delta: string }
-  | { type: "thinking_delta"; delta: string }
-  | { type: "tool_started"; tool: ToolCall }
-  | { type: "tool_updated"; toolCallId: string; output?: string }
-  | { type: "tool_finished"; toolCallId: string; output?: string; isError?: boolean }
-  | { type: "message_end"; message: ChatMessage }
-  | { type: "turn_finished"; contextUsage?: ContextUsage; error?: string }
-  | { type: "session_updated"; summary?: SessionSummary; model?: { provider: string; id: string }; thinkingLevel?: ThinkingLevel; contextUsage?: ContextUsage };
+  | { type: "agent_start"; sessionId: string }
+  | { type: "text_delta"; sessionId: string; delta: string }
+  | { type: "thinking_delta"; sessionId: string; delta: string }
+  | { type: "tool_start"; sessionId: string; tool: ToolCall }
+  | { type: "tool_update"; sessionId: string; toolCallId: string; output?: string }
+  | { type: "tool_end"; sessionId: string; toolCallId: string; output?: string; isError?: boolean }
+  | { type: "message_end"; sessionId: string; message: ChatMessage }
+  | { type: "agent_end"; sessionId: string; contextUsage?: ContextUsage; error?: string }
+  | { type: "session_updated"; sessionId: string; summary?: SessionSummary; model?: { provider: string; id: string }; thinkingLevel?: ThinkingLevel; contextUsage?: ContextUsage };
 
 type CommandBase = { requestId?: string };
 
 export type ClientMessage = CommandBase & (
+  | { type: "init"; protocolVersion: typeof PROTOCOL_VERSION }
   | { type: "ping" }
   | { type: "list_sessions" }
   | { type: "create_session" }
@@ -163,18 +175,18 @@ export type ClientMessage = CommandBase & (
   | { type: "set_plugin_enabled"; source: string; scope: "global" | "project"; enabled: boolean }
   | { type: "set_subagent_settings"; enabled?: boolean; maxConcurrent?: number }
   | { type: "set_subagent_profile_enabled"; profileId: SubagentProfileInfo["id"]; enabled: boolean }
-  | { type: "create_subagent_profile"; id: string; name: string; description: string; systemPrompt: string; tools: string[]; scope: "global" | "project" }
+  | { type: "create_subagent_profile"; id: string; name: string; description: string; systemPrompt: string; tools: string[]; skills?: string[]; extensions?: string[]; scope: "global" | "project" }
   | { type: "delete_subagent_profile"; profileId: string }
   | { type: "save_mcp_config"; content: string }
 );
 
 export type ServerMessage = (
+  | { type: "init"; protocolVersion: typeof PROTOCOL_VERSION; sessions: SessionSummary[]; models: ModelInfo[]; providers: ProviderInfo[]; settings: FeatureSettings }
   | { type: "pong" }
   | { type: "sessions"; sessions: SessionSummary[] }
   | { type: "session_created"; session: SessionSnapshot }
   | { type: "session_state"; session: SessionSnapshot }
   | { type: "session_deleted"; sessionId: string }
-  | { type: "session_event"; sessionId: string; event: AgentUiEvent }
   | { type: "models"; models: ModelInfo[] }
   | { type: "models_config"; content: string }
   | { type: "models_saved" }
@@ -186,4 +198,5 @@ export type ServerMessage = (
   | { type: "feature_settings"; settings: FeatureSettings }
   | { type: "feature_action_complete"; category: "skills" | "plugins" | "subagents" | "mcp"; settings: FeatureSettings }
   | { type: "error"; message: string; code?: string; sessionId?: string }
+  | AgentUiEvent
 ) & { requestId?: string };

@@ -39,6 +39,17 @@ try {
     socket.addEventListener('error', reject, { once: true })
   })
 
+  const rejectedBeforeInit = await request({ type: 'ping' }, 'error')
+  if (rejectedBeforeInit.code !== 'INIT_REQUIRED') throw new Error('Server accepted a command before init')
+
+  const initialized = await request({ type: 'init', protocolVersion: 1 }, 'init')
+  if (initialized.protocolVersion !== 1) throw new Error('Unexpected protocol version')
+  if (!Array.isArray(initialized.sessions) || !Array.isArray(initialized.models) || !Array.isArray(initialized.providers)) {
+    throw new Error('Init catalog missing')
+  }
+  if (!initialized.settings || !Array.isArray(initialized.settings.skills) || !Array.isArray(initialized.settings.subagents?.profiles)) {
+    throw new Error('Init feature settings missing')
+  }
   await request({ type: 'ping' }, 'pong')
   await request({ type: 'list_sessions' }, 'sessions')
   await request({ type: 'list_models' }, 'models')

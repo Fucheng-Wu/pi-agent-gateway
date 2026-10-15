@@ -17,6 +17,7 @@ export type {
   ThinkingLevel,
   ToolCall
 } from '../../shared/types'
+export { PROTOCOL_VERSION } from '../../shared/types'
 
 import type { ChatMessage, ContextUsage, SessionSummary, ThinkingLevel } from '../../shared/types'
 

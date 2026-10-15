@@ -15,12 +15,7 @@ export function useEventBridge() {
   onMounted(() => {
     store.setSender(ws.send)
     offMessage = ws.onMessage((message) => store.handleServerMessage(message))
-    offOpen = ws.onOpen(() => {
-      store.refreshSessions()
-      store.refreshModels()
-      store.refreshProviders()
-      if (store.activeSessionId) store.loadSession(store.activeSessionId)
-    })
+    offOpen = ws.onOpen(() => store.initialize())
     ws.connect()
   })
 

@@ -37,7 +37,32 @@ pi 只会在首次产生助手消息后写出会话文件，因此尚未开始�
 
 如果已有 pi 配置，后端会读取 `~/.pi/agent/` 下的 `models.json`、`settings.json`、`auth.json` 和 `sessions/`。可以在“设置 → 模型”中通过结构化表单添加 Provider、发现或手动添加模型、测试连接，并完成内置 Provider 认证。密钥只保存在本机的 pi 配置中，不要将配置文件提交到仓库。
 
-技能和插件沿用 Pi 的全局及项目资源发现规则。新增技能写入全局 `~/.pi/agent/skills/` 或项目 `.pi/skills/`，自定义子代理写入对应的 `agents/` 目录；MCP 服务保存在 `~/.pi/agent/mcp.json`，子代理开关和并发上限保存在 `~/.pi/agent/agents/settings.json`。设置保存后会自动重载当前空闲会话，正在回复的会话会在下次重载或重新打开后生效。
+技能和插件保留 Pi 原有的全局及项目资源发现规则，并额外把 [`backend/skills`](./backend/skills/README.md) 交给 `DefaultResourceLoader` 加载。可以直接把符合 Agent Skills 规范的目录放进去；设置页选择“当前项目”创建技能时也会写到这里。
+
+项目自定义子 agent 放在 [`backend/subagents`](./backend/subagents/README.md)。每个角色可以分别配置系统提示词、内置工具白名单、技能白名单和专属 TypeScript 工具扩展。项目级开关和并发上限保存在 `backend/subagents/settings.json`；全局子 agent 仍兼容 `~/.pi/agent/agents/`。MCP 服务保存在 `~/.pi/agent/mcp.json`。设置保存后会自动重载当前空闲会话，正在回复的会话会在下次重载或重新打开后生效。
+
+## WebSocket 协议
+
+连接 `/ws` 后必须先完成 v1 握手：
+
+```json
+{"type":"init","protocolVersion":1,"requestId":"..."}
+```
+
+服务端返回同类型 `init` 消息，其中一次包含 `sessions`、`models`、`providers` 和 `settings` 初始目录。握手前发送其他命令会收到 `INIT_REQUIRED`。
+
+Agent 的实时输出是扁平顶层事件，不再使用 `session_event.event` 包装。所有运行事件都带 `sessionId`，可直接按会话分流：
+
+```json
+{"type":"agent_start","sessionId":"..."}
+{"type":"text_delta","sessionId":"...","delta":"你好"}
+{"type":"tool_start","sessionId":"...","tool":{"id":"...","name":"read","status":"running"}}
+{"type":"tool_end","sessionId":"...","toolCallId":"...","output":"..."}
+{"type":"message_end","sessionId":"...","message":{"id":"...","role":"assistant","text":"..."}}
+{"type":"agent_end","sessionId":"..."}
+```
+
+完整协议类型位于 `shared/types.ts`。
 
 本项目默认只监听本机地址。后端能够调用 pi 的文件和终端工具，也会读取本机模型凭证；如需让其他设备访问，应先增加身份验证并限制可访问的工作目录。
 
