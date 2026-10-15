@@ -49,6 +49,22 @@ export interface ProviderInfo {
   modelCount?: number;
 }
 
+export interface DiscoveredModelInfo {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+export interface ModelConnectionTestResult {
+  ok: boolean;
+  error?: string;
+  latencyMs?: number;
+  status?: number;
+  responseText?: string;
+}
+
 export interface SkillInfo {
   name: string;
   description: string;
@@ -67,11 +83,15 @@ export interface PluginInfo {
 }
 
 export interface SubagentProfileInfo {
-  id: "general-purpose" | "explore" | "plan";
+  id: string;
   name: string;
   description: string;
   tools: string[];
   enabled: boolean;
+  systemPrompt: string;
+  builtIn: boolean;
+  scope: "builtin" | "global" | "project";
+  filePath?: string;
 }
 
 export interface SubagentSettingsInfo {
@@ -130,16 +150,21 @@ export type ClientMessage = CommandBase & (
   | { type: "list_models" }
   | { type: "get_models_config" }
   | { type: "save_models_config"; content: string }
+  | { type: "discover_provider_models"; providerName: string; provider: Record<string, unknown> }
+  | { type: "test_model_config"; providerName: string; provider: Record<string, unknown>; model: Record<string, unknown> }
   | { type: "list_providers" }
   | { type: "provider_login"; providerId: string; methodId?: string }
   | { type: "auth_response"; challengeId: string; value: string }
   | { type: "auth_cancel"; challengeId: string }
   | { type: "get_feature_settings" }
+  | { type: "create_skill"; name: string; description: string; instructions: string; scope: "global" | "project" }
   | { type: "set_skill_enabled"; filePath: string; enabled: boolean }
   | { type: "plugin_action"; action: "install" | "remove" | "update"; source: string; scope?: "global" | "project" }
   | { type: "set_plugin_enabled"; source: string; scope: "global" | "project"; enabled: boolean }
   | { type: "set_subagent_settings"; enabled?: boolean; maxConcurrent?: number }
   | { type: "set_subagent_profile_enabled"; profileId: SubagentProfileInfo["id"]; enabled: boolean }
+  | { type: "create_subagent_profile"; id: string; name: string; description: string; systemPrompt: string; tools: string[]; scope: "global" | "project" }
+  | { type: "delete_subagent_profile"; profileId: string }
   | { type: "save_mcp_config"; content: string }
 );
 
@@ -153,6 +178,8 @@ export type ServerMessage = (
   | { type: "models"; models: ModelInfo[] }
   | { type: "models_config"; content: string }
   | { type: "models_saved" }
+  | { type: "provider_models_discovered"; providerName: string; models: DiscoveredModelInfo[]; endpoint: string }
+  | { type: "model_config_tested"; providerName: string; modelId: string; result: ModelConnectionTestResult }
   | { type: "providers"; providers: ProviderInfo[] }
   | { type: "auth_challenge"; challengeId: string; providerId: string; prompt: string; mode: "input" | "select" | "confirm"; options?: string[]; placeholder?: string; allowEmpty?: boolean }
   | { type: "auth_status"; providerId: string; status: "started" | "complete" | "cancelled" | "error"; message?: string; url?: string }

@@ -127,6 +127,11 @@ function requireString(value: unknown, field: string, maxLength = 100_000): stri
   return value;
 }
 
+function requireRecord(value: unknown, field: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${field} 必须是对象`);
+  return value as Record<string, unknown>;
+}
+
 function parseClientMessage(data: WebSocket.RawData): ClientMessage {
   let parsed: unknown;
   try { parsed = JSON.parse(data.toString()); }
@@ -251,6 +256,20 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
       notifyCatalogChanged();
       return;
     }
+    case "discover_provider_models": {
+      const providerName = requireText(message.providerName, "providerName", 128);
+      const discovered = await models.discoverProviderModels(providerName, requireRecord(message.provider, "provider"));
+      send(ws, { type: "provider_models_discovered", providerName, ...discovered, requestId });
+      return;
+    }
+    case "test_model_config": {
+      const providerName = requireText(message.providerName, "providerName", 128);
+      const model = requireRecord(message.model, "model");
+      const modelId = requireText(model.id, "model.id", 256);
+      const result = await models.testModelConfig(providerName, requireRecord(message.provider, "provider"), model);
+      send(ws, { type: "model_config_tested", providerName, modelId, result, requestId });
+      return;
+    }
     case "list_providers": send(ws, { type: "providers", providers: models.getProvidersInfo(), requestId }); return;
     case "provider_login":
       void auth.login(requireText(message.providerId, "providerId", 128), message.methodId)
@@ -262,6 +281,17 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
     case "auth_cancel": auth.cancel(requireText(message.challengeId, "challengeId", 128)); return;
     case "get_feature_settings":
       await sendFeatureSettings(ws, "feature_settings", requestId);
+      return;
+    case "create_skill":
+      if (message.scope !== "global" && message.scope !== "project") throw new Error("技能作用域无效");
+      await resources.features.createSkill({
+        name: requireText(message.name, "name", 64),
+        description: requireText(message.description, "description", 500),
+        instructions: requireText(message.instructions, "instructions", 100_000),
+        scope: message.scope,
+      });
+      await reloadIdleSessions();
+      await sendFeatureSettings(ws, "feature_action_complete", requestId, "skills");
       return;
     case "set_skill_enabled":
       if (typeof message.enabled !== "boolean") throw new Error("enabled 必须是布尔值");
@@ -292,6 +322,25 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
     case "set_subagent_profile_enabled":
       if (typeof message.enabled !== "boolean") throw new Error("enabled 必须是布尔值");
       await resources.features.setSubagentProfileEnabled(message.profileId, message.enabled);
+      await reloadIdleSessions();
+      await sendFeatureSettings(ws, "feature_action_complete", requestId, "subagents");
+      return;
+    case "create_subagent_profile":
+      if (message.scope !== "global" && message.scope !== "project") throw new Error("子代理作用域无效");
+      if (!Array.isArray(message.tools) || !message.tools.every((tool) => typeof tool === "string")) throw new Error("tools 必须是字符串数组");
+      await resources.features.createSubagentProfile({
+        id: requireText(message.id, "id", 64),
+        name: requireText(message.name, "name", 100),
+        description: requireText(message.description, "description", 500),
+        systemPrompt: requireText(message.systemPrompt, "systemPrompt", 50_000),
+        tools: message.tools,
+        scope: message.scope,
+      });
+      await reloadIdleSessions();
+      await sendFeatureSettings(ws, "feature_action_complete", requestId, "subagents");
+      return;
+    case "delete_subagent_profile":
+      await resources.features.deleteSubagentProfile(requireText(message.profileId, "profileId", 64));
       await reloadIdleSessions();
       await sendFeatureSettings(ws, "feature_action_complete", requestId, "subagents");
       return;

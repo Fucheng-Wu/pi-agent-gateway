@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import type { Dirent } from "node:fs";
+import { mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import {
   createAgentSession,
   createCodemodeExtension,
@@ -37,20 +38,33 @@ const SUBAGENT_PROFILES: Omit<SubagentProfileInfo, "enabled">[] = [
     name: "通用执行",
     description: "独立完成分析、编码和验证任务。",
     tools: ["read", "grep", "find", "ls", "bash", "edit", "write"],
+    systemPrompt: "你是独立执行子代理。完成委派任务，必要时修改代码并验证，最后报告结果与关键文件。",
+    builtIn: true,
+    scope: "builtin",
   },
   {
     id: "explore",
     name: "代码探索",
     description: "只读检索项目并汇总结论。",
     tools: ["read", "grep", "find", "ls"],
+    systemPrompt: "你是只读代码探索子代理。检索相关实现，给出带文件依据的简洁结论，不修改文件。",
+    builtIn: true,
+    scope: "builtin",
   },
   {
     id: "plan",
     name: "方案规划",
     description: "只读分析需求、依赖和实施步骤。",
     tools: ["read", "grep", "find", "ls"],
+    systemPrompt: "你是规划子代理。分析需求和现有代码，给出可执行的实施方案、风险与验证步骤，不修改文件。",
+    builtIn: true,
+    scope: "builtin",
   },
 ];
+
+const PROFILE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const ALLOWED_SUBAGENT_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write"]);
 
 interface StoredSubagentSettings {
   builtInEnabled?: boolean;
@@ -71,14 +85,35 @@ function packageDisabled(entry: PackageSource): boolean {
     && Array.isArray(entry.themes) && entry.themes.length === 0;
 }
 
-function profilePrompt(profileId: SubagentProfileInfo["id"]): string {
-  if (profileId === "explore") {
-    return "你是只读代码探索子代理。检索相关实现，给出带文件依据的简洁结论，不修改文件。";
-  }
-  if (profileId === "plan") {
-    return "你是规划子代理。分析需求和现有代码，给出可执行的实施方案、风险与验证步骤，不修改文件。";
-  }
-  return "你是独立执行子代理。完成委派任务，必要时修改代码并验证，最后报告结果与关键文件。";
+function frontmatterValue(source: string, key: string): unknown {
+  const match = source.match(new RegExp(`^${key}\\s*:\\s*(.+)$`, "m"));
+  if (!match) return undefined;
+  const value = match[1].trim();
+  try { return JSON.parse(value); }
+  catch { return value.replace(/^['"]|['"]$/g, ""); }
+}
+
+function parseCustomProfile(content: string, filePath: string, scope: "global" | "project"): Omit<SubagentProfileInfo, "enabled"> | null {
+  const block = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/);
+  if (!block) return null;
+  const id = String(frontmatterValue(block[1], "name") ?? basename(filePath, ".md")).trim();
+  if (!PROFILE_ID.test(id)) return null;
+  const rawTools = frontmatterValue(block[1], "tools");
+  const tools = Array.isArray(rawTools)
+    ? rawTools.filter((tool): tool is string => typeof tool === "string" && ALLOWED_SUBAGENT_TOOLS.has(tool))
+    : typeof rawTools === "string"
+      ? rawTools.replace(/^\[|\]$/g, "").split(",").map((tool) => tool.trim()).filter((tool) => ALLOWED_SUBAGENT_TOOLS.has(tool))
+      : ["read", "grep", "find", "ls"];
+  return {
+    id,
+    name: String(frontmatterValue(block[1], "display_name") ?? id),
+    description: String(frontmatterValue(block[1], "description") ?? id),
+    tools: [...new Set(tools)],
+    systemPrompt: block[2].trim(),
+    builtIn: false,
+    scope,
+    filePath,
+  };
 }
 
 function textFromAssistantMessages(messages: readonly unknown[]): string {
@@ -146,6 +181,14 @@ export class FeatureManager {
     return join(this.agentDir, "mcp.json");
   }
 
+  private get globalAgentsDir(): string {
+    return join(this.agentDir, "agents");
+  }
+
+  private get projectAgentsDir(): string {
+    return join(this.cwd, ".pi", "agents");
+  }
+
   private async atomicWrite(path: string, content: string): Promise<void> {
     await mkdir(dirname(path), { recursive: true });
     const temp = join(dirname(path), `.${randomUUID()}.tmp`);
@@ -173,17 +216,42 @@ export class FeatureManager {
     await this.atomicWrite(this.subagentSettingsPath, `${JSON.stringify({ ...current, ...patch }, null, 2)}\n`);
   }
 
+  private async readCustomProfiles(): Promise<Array<Omit<SubagentProfileInfo, "enabled">>> {
+    const profiles = new Map<string, Omit<SubagentProfileInfo, "enabled">>();
+    for (const [directory, scope] of [[this.globalAgentsDir, "global"], [this.projectAgentsDir, "project"]] as const) {
+      let entries: Dirent<string>[];
+      try { entries = await readdir(directory, { withFileTypes: true }); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) continue;
+        const filePath = join(directory, entry.name);
+        const profile = parseCustomProfile(await readFile(filePath, "utf8"), filePath, scope);
+        if (profile) profiles.set(profile.id.toLowerCase(), profile);
+      }
+    }
+    return [...profiles.values()];
+  }
+
   async getSubagentSettings(): Promise<SubagentSettingsInfo> {
     const stored = await this.readStoredSubagentSettings();
     const disabled = new Set(Array.isArray(stored.disabledBuiltIns) ? stored.disabledBuiltIns.filter((item): item is string => typeof item === "string") : []);
     const maxConcurrent = Number.isInteger(stored.maxConcurrent) && Number(stored.maxConcurrent) >= 1 && Number(stored.maxConcurrent) <= MAX_SUBAGENTS
       ? Number(stored.maxConcurrent)
       : 3;
+    const custom = await this.readCustomProfiles();
+    const reserved = new Set(custom.map((profile) => profile.id.toLowerCase()));
+    const profiles = [
+      ...SUBAGENT_PROFILES.filter((profile) => !reserved.has(profile.id.toLowerCase())),
+      ...custom,
+    ].map((profile) => ({ ...profile, enabled: !disabled.has(profile.id) }));
     return {
       enabled: stored.builtInEnabled === true,
       maxConcurrent,
       active: this.activeSubagents,
-      profiles: SUBAGENT_PROFILES.map((profile) => ({ ...profile, enabled: !disabled.has(profile.id) })),
+      profiles,
     };
   }
 
@@ -199,12 +267,60 @@ export class FeatureManager {
   }
 
   async setSubagentProfileEnabled(profileId: SubagentProfileInfo["id"], enabled: boolean): Promise<void> {
-    if (!SUBAGENT_PROFILES.some((profile) => profile.id === profileId)) throw new Error("未知子代理角色");
+    if (!(await this.getSubagentSettings()).profiles.some((profile) => profile.id === profileId)) throw new Error("未知子代理角色");
     const stored = await this.readStoredSubagentSettings();
     const disabled = new Set(Array.isArray(stored.disabledBuiltIns) ? stored.disabledBuiltIns.filter((item): item is string => typeof item === "string") : []);
     if (enabled) disabled.delete(profileId);
     else disabled.add(profileId);
     await this.writeStoredSubagentSettings({ disabledBuiltIns: [...disabled].sort() });
+  }
+
+  async createSubagentProfile(input: {
+    id: string;
+    name: string;
+    description: string;
+    systemPrompt: string;
+    tools: string[];
+    scope: "global" | "project";
+  }): Promise<void> {
+    const id = input.id.trim();
+    if (!PROFILE_ID.test(id)) throw new Error("子代理 ID 只能包含字母、数字、点、下划线和连字符，且不能超过 64 个字符");
+    if (SUBAGENT_PROFILES.some((profile) => profile.id.toLowerCase() === id.toLowerCase())) throw new Error("不能覆盖内置子代理");
+    if ((await this.readCustomProfiles()).some((profile) => profile.id.toLowerCase() === id.toLowerCase())) throw new Error("同名子代理已存在");
+    const name = input.name.trim() || id;
+    const description = input.description.trim() || name;
+    const systemPrompt = input.systemPrompt.trim();
+    if (!systemPrompt) throw new Error("子代理系统提示不能为空");
+    if (name.length > 100 || description.length > 500 || systemPrompt.length > 50_000) throw new Error("子代理字段长度超出限制");
+    const tools = [...new Set(input.tools.filter((tool) => ALLOWED_SUBAGENT_TOOLS.has(tool)))];
+    const directory = input.scope === "project" ? this.projectAgentsDir : this.globalAgentsDir;
+    await mkdir(directory, { recursive: true });
+    const filePath = join(directory, `${id}.md`);
+    const body = [
+      "---",
+      `name: ${id}`,
+      `display_name: ${JSON.stringify(name)}`,
+      `description: ${JSON.stringify(description)}`,
+      `tools: ${JSON.stringify(tools)}`,
+      "enabled: true",
+      "---",
+      "",
+      systemPrompt,
+      "",
+    ].join("\n");
+    await writeFile(filePath, body, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  }
+
+  async deleteSubagentProfile(profileId: string): Promise<void> {
+    const profile = (await this.getSubagentSettings()).profiles.find((item) => item.id === profileId);
+    if (!profile || profile.builtIn || !profile.filePath) throw new Error("只能删除自定义子代理");
+    const allowedRoots = [resolve(this.globalAgentsDir), resolve(this.projectAgentsDir)];
+    const target = resolve(await realpath(profile.filePath));
+    if (!allowedRoots.some((root) => dirname(target) === root)) throw new Error("子代理文件不在允许的目录中");
+    await rm(target);
+    const stored = await this.readStoredSubagentSettings();
+    const disabled = new Set(Array.isArray(stored.disabledBuiltIns) ? stored.disabledBuiltIns : []);
+    if (disabled.delete(profileId)) await this.writeStoredSubagentSettings({ disabledBuiltIns: [...disabled].sort() });
   }
 
   private createSubagentExtension(): ExtensionFactory {
@@ -243,7 +359,7 @@ export class FeatureManager {
               agentDir: this.agentDir,
               settingsManager: this.settingsManager,
               noExtensions: true,
-              systemPrompt: profilePrompt(profile.id),
+              systemPrompt: profile.systemPrompt,
             });
             await childLoader.reload();
             const manager = SessionManager.inMemory(ctx.cwd);
@@ -315,6 +431,41 @@ export class FeatureManager {
         modelInvocable: !skill.disableModelInvocation,
       }))
       .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async createSkill(input: {
+    name: string;
+    description: string;
+    instructions: string;
+    scope: "global" | "project";
+  }): Promise<void> {
+    const name = input.name.trim();
+    if (!SKILL_NAME.test(name)) throw new Error("技能名称只能使用小写字母、数字和连字符，且不能超过 64 个字符");
+    if ((await this.getSkills()).some((skill) => skill.name.toLowerCase() === name.toLowerCase())) throw new Error("同名技能已存在");
+    const description = input.description.trim();
+    const instructions = input.instructions.trim();
+    if (!description || !instructions) throw new Error("技能描述和指令不能为空");
+    if (description.length > 500 || instructions.length > 100_000) throw new Error("技能内容长度超出限制");
+    const parent = input.scope === "project" ? join(this.cwd, ".pi", "skills") : join(this.agentDir, "skills");
+    const directory = join(parent, name);
+    await mkdir(parent, { recursive: true });
+    await mkdir(directory);
+    try {
+      await writeFile(join(directory, "SKILL.md"), [
+        "---",
+        `name: ${name}`,
+        `description: ${JSON.stringify(description)}`,
+        "---",
+        "",
+        `# ${name}`,
+        "",
+        instructions,
+        "",
+      ].join("\n"), { encoding: "utf8", mode: 0o600, flag: "wx" });
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true });
+      throw error;
+    }
   }
 
   async setSkillEnabled(filePath: string, enabled: boolean): Promise<void> {

@@ -34,6 +34,8 @@ export const useSessionPool = defineStore('session-pool', () => {
   const modelsConfig = ref('')
   const configLoaded = ref(false)
   const configSaving = ref(false)
+  const modelDiscovery = ref<{ providerName: string; loading: boolean; models: Array<{ id: string; name?: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number }>; endpoint?: string }>({ providerName: '', loading: false, models: [] })
+  const modelTest = ref<{ providerName: string; modelId: string; loading: boolean; result?: { ok: boolean; error?: string; latencyMs?: number; status?: number; responseText?: string } }>({ providerName: '', modelId: '', loading: false })
   let savingContent = ''
   const authChallenge = ref<AuthChallenge | null>(null)
   const authStatus = ref<AuthStatus | null>(null)
@@ -74,6 +76,17 @@ export const useSessionPool = defineStore('session-pool', () => {
     if (!dispatch({ type: 'save_models_config', content })) { configSaving.value = false; return false }
     return true
   }
+  function discoverProviderModels(providerName: string, provider: Record<string, unknown>) {
+    modelDiscovery.value = { providerName, loading: true, models: [] }
+    if (!dispatch({ type: 'discover_provider_models', providerName, provider })) { modelDiscovery.value.loading = false; return false }
+    return true
+  }
+  function testModelConfig(providerName: string, provider: Record<string, unknown>, model: Record<string, unknown>) {
+    const modelId = typeof model.id === 'string' ? model.id : ''
+    modelTest.value = { providerName, modelId, loading: true }
+    if (!dispatch({ type: 'test_model_config', providerName, provider, model })) { modelTest.value.loading = false; return false }
+    return true
+  }
 
   function createSession() { return dispatch({ type: 'create_session' }) }
   function loadSession(sessionId: string) {
@@ -87,6 +100,8 @@ export const useSessionPool = defineStore('session-pool', () => {
     loadingSessions.clear()
     loadRevisions.clear()
     configSaving.value = false
+    modelDiscovery.value.loading = false
+    modelTest.value.loading = false
     featureSettingsLoading.value = false
     featureAction.value = null
   }
@@ -135,6 +150,11 @@ export const useSessionPool = defineStore('session-pool', () => {
     if (!dispatch({ type: 'get_feature_settings' })) { featureSettingsLoading.value = false; return false }
     return true
   }
+  function createSkill(input: { name: string; description: string; instructions: string; scope: 'global' | 'project' }) {
+    featureAction.value = 'skill:create'
+    if (!dispatch({ type: 'create_skill', ...input })) { featureAction.value = null; return false }
+    return true
+  }
   function setSkillEnabled(filePath: string, enabled: boolean) {
     featureAction.value = `skill:${filePath}`
     if (!dispatch({ type: 'set_skill_enabled', filePath, enabled })) { featureAction.value = null; return false }
@@ -158,6 +178,16 @@ export const useSessionPool = defineStore('session-pool', () => {
   function setSubagentProfileEnabled(profileId: SubagentProfileInfo['id'], enabled: boolean) {
     featureAction.value = `subagents:${profileId}`
     if (!dispatch({ type: 'set_subagent_profile_enabled', profileId, enabled })) { featureAction.value = null; return false }
+    return true
+  }
+  function createSubagentProfile(input: { id: string; name: string; description: string; systemPrompt: string; tools: string[]; scope: 'global' | 'project' }) {
+    featureAction.value = 'subagents:create'
+    if (!dispatch({ type: 'create_subagent_profile', ...input })) { featureAction.value = null; return false }
+    return true
+  }
+  function deleteSubagentProfile(profileId: string) {
+    featureAction.value = `subagents:delete:${profileId}`
+    if (!dispatch({ type: 'delete_subagent_profile', profileId })) { featureAction.value = null; return false }
     return true
   }
   function saveMcpConfig(content: string) {
@@ -320,6 +350,12 @@ export const useSessionPool = defineStore('session-pool', () => {
         tell('模型配置已保存', 'success')
         refreshModels(); refreshProviders()
         break
+      case 'provider_models_discovered':
+        modelDiscovery.value = { providerName: message.providerName, loading: false, models: message.models, endpoint: message.endpoint }
+        break
+      case 'model_config_tested':
+        modelTest.value = { providerName: message.providerName, modelId: message.modelId, loading: false, result: message.result }
+        break
       case 'auth_challenge': authChallenge.value = message; break
       case 'auth_status':
         authStatus.value = message
@@ -338,6 +374,8 @@ export const useSessionPool = defineStore('session-pool', () => {
         break
       case 'error':
         configSaving.value = false
+        modelDiscovery.value.loading = false
+        modelTest.value.loading = false
         featureSettingsLoading.value = false
         featureAction.value = null
         if (message.sessionId) loadingSessions.delete(message.sessionId)
@@ -349,12 +387,12 @@ export const useSessionPool = defineStore('session-pool', () => {
 
   return {
     sessions, sortedSessions, sessionStates, activeSessionId, activeSession, models, providers,
-    modelsConfig, configLoaded, configSaving, authChallenge, authStatus,
+    modelsConfig, configLoaded, configSaving, modelDiscovery, modelTest, authChallenge, authStatus,
     featureSettings, featureSettingsLoading, featureAction, notice, setSender,
-    refreshSessions, refreshModels, refreshProviders, fetchModelsConfig, saveModelsConfig,
+    refreshSessions, refreshModels, refreshProviders, fetchModelsConfig, saveModelsConfig, discoverProviderModels, testModelConfig,
     createSession, loadSession, selectSession, deleteSession, prompt, abort, setModel, setThinkingLevel,
-    login, submitAuth, cancelAuth, refreshFeatureSettings, setSkillEnabled, runPluginAction, setPluginEnabled,
-    setSubagentSettings, setSubagentProfileEnabled, saveMcpConfig,
+    login, submitAuth, cancelAuth, refreshFeatureSettings, createSkill, setSkillEnabled, runPluginAction, setPluginEnabled,
+    setSubagentSettings, setSubagentProfileEnabled, createSubagentProfile, deleteSubagentProfile, saveMcpConfig,
     handleServerMessage, onTransportDisconnected
   }
 })
