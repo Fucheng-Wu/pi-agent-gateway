@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ChevronDown, Cpu } from 'lucide-vue-next'
+import { Cpu } from 'lucide-vue-next'
 import type { ModelInfo } from '@/types'
+import AppSelect from './AppSelect.vue'
 
 const props = defineProps<{
   models: ModelInfo[]
@@ -10,38 +11,43 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ select: [provider: string, modelId: string] }>()
 
-const groups = computed(() => {
-  const grouped = new Map<string, ModelInfo[]>()
-  for (const model of props.models) {
-    if (!grouped.has(model.provider)) grouped.set(model.provider, [])
-    grouped.get(model.provider)!.push(model)
+const selectedValue = computed(() => props.selected ? JSON.stringify([props.selected.provider, props.selected.id]) : '')
+const options = computed(() => {
+  const values = props.models.map((model) => ({
+    value: JSON.stringify([model.provider, model.id]),
+    label: model.name || model.id,
+    description: model.name && model.name !== model.id ? model.id : model.contextWindow ? `${model.contextWindow.toLocaleString()} context` : '可用模型',
+    group: model.provider,
+    badge: model.reasoning ? '推理' : undefined,
+  }))
+  if (props.selected && !props.models.some((model) => model.provider === props.selected?.provider && model.id === props.selected?.id)) {
+    values.unshift({ value: selectedValue.value, label: props.selected.id, description: '当前会话模型', group: props.selected.provider, badge: undefined })
   }
-  return [...grouped.entries()]
+  return values
 })
-const selectedValue = computed(() => props.selected ? `${props.selected.provider}\u0000${props.selected.id}` : '')
-function onChange(event: Event) {
-  const value = (event.target as HTMLSelectElement).value
-  const separator = value.indexOf('\u0000')
-  if (separator < 0) return
-  emit('select', value.slice(0, separator), value.slice(separator + 1))
+function onChange(value: string) {
+  try {
+    const [provider, modelId] = JSON.parse(value) as [string, string]
+    if (provider && modelId) emit('select', provider, modelId)
+  } catch { /* Ignore malformed option values. */ }
 }
 </script>
 
 <template>
-  <label class="relative inline-flex min-w-0 max-w-[15rem] items-center gap-1.5 rounded-lg border border-white/[.08] bg-white/[.045] px-2.5 py-1.5 text-xs text-slate-200 transition hover:bg-white/[.085] focus-within:border-accent-400/60">
-    <Cpu :size="14" class="shrink-0 text-accent-300" />
-    <span class="sr-only">选择模型</span>
-    <select :value="selectedValue" :disabled="disabled || !models.length" class="min-w-0 flex-1 appearance-none truncate bg-transparent pr-3 outline-none" @change="onChange">
-      <option value="" disabled>{{ models.length ? '选择模型' : '暂无模型' }}</option>
-      <option v-if="selected && !models.some(m => m.provider === selected?.provider && m.id === selected?.id)" :value="selectedValue">{{ selected.provider }} / {{ selected.id }}</option>
-      <optgroup v-for="[provider, items] in groups" :key="provider" :label="provider">
-        <option v-for="model in items" :key="model.id" :value="`${model.provider}\u0000${model.id}`">{{ model.name || model.id }}</option>
-      </optgroup>
-    </select>
-    <ChevronDown :size="12" class="pointer-events-none absolute right-2 text-slate-500" />
-  </label>
+  <AppSelect
+    :model-value="selectedValue"
+    :options="options"
+    :disabled="disabled || !models.length"
+    :placeholder="models.length ? '选择模型' : '暂无模型'"
+    aria-label="选择模型"
+    search-placeholder="搜索模型或 Provider…"
+    searchable
+    placement="top"
+    :menu-width="300"
+    compact
+    class="max-w-[14rem] flex-1 sm:flex-none sm:w-[13rem]"
+    @change="onChange"
+  >
+    <template #prefix><Cpu :size="14" class="shrink-0 text-accent-300" /></template>
+  </AppSelect>
 </template>
-
-<style scoped>
-select option, select optgroup { color: rgb(var(--slate-100)); background: rgb(var(--ink-800)); }
-</style>

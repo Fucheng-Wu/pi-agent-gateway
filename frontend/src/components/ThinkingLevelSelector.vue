@@ -1,31 +1,33 @@
 <script setup lang="ts">
-import { Brain, ChevronDown } from 'lucide-vue-next'
+import { Brain } from 'lucide-vue-next'
 import type { ThinkingLevel } from '@/types'
+import AppSelect from './AppSelect.vue'
 
 defineProps<{ selected: ThinkingLevel; disabled?: boolean }>()
 const emit = defineEmits<{ select: [level: ThinkingLevel] }>()
-const options: { value: ThinkingLevel; label: string }[] = [
-  { value: 'off', label: '关闭思考' },
-  { value: 'minimal', label: '极简' },
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
-  { value: 'xhigh', label: '极高' },
-  { value: 'max', label: '最高' }
+const options: { value: ThinkingLevel; label: string; description: string; badge?: string }[] = [
+  { value: 'off', label: 'off', description: '速度优先，适合直接问答' },
+  { value: 'minimal', label: 'minimal', description: '少量推理，响应更快' },
+  { value: 'low', label: 'low', description: '轻量分析日常任务' },
+  { value: 'medium', label: 'medium', description: '速度与推理的均衡选择', badge: '推荐' },
+  { value: 'high', label: 'high', description: '深入分析复杂问题' },
+  { value: 'xhigh', label: 'xhigh', description: '更充分的推理预算' },
+  { value: 'max', label: 'max', description: '最强推理，耗时也更长' }
 ]
 </script>
 
 <template>
-  <label class="relative inline-flex items-center gap-1.5 rounded-lg border border-white/[.08] bg-white/[.045] px-2.5 py-1.5 text-xs text-slate-200 transition hover:bg-white/[.085] focus-within:border-accent-400/60">
-    <Brain :size="14" class="shrink-0 text-accent-300" />
-    <span class="sr-only">思考强度</span>
-    <select :value="selected" :disabled="disabled" class="appearance-none bg-transparent pr-4 outline-none" @change="emit('select', ($event.target as HTMLSelectElement).value as ThinkingLevel)">
-      <option v-for="option in options" :key="option.value" :value="option.value">{{ option.label }}</option>
-    </select>
-    <ChevronDown :size="12" class="pointer-events-none absolute right-2 text-slate-500" />
-  </label>
+  <AppSelect
+    :model-value="selected"
+    :options="options"
+    :disabled="disabled"
+    aria-label="思考强度"
+    placement="top"
+    :menu-width="230"
+    compact
+    class="w-[7.5rem]"
+    @change="emit('select', $event as ThinkingLevel)"
+  >
+    <template #prefix><Brain :size="14" class="shrink-0 text-accent-300" /></template>
+  </AppSelect>
 </template>
-
-<style scoped>
-select option { color: rgb(var(--slate-100)); background: rgb(var(--ink-800)); }
-</style>
