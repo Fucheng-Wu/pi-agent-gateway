@@ -23,12 +23,10 @@ function resultText(value: unknown): string {
 }
 
 function finishedMessage(active: ActiveSession, raw: unknown): ChatMessage | undefined {
-  const message = convertMessages([raw])[0];
-  if (!message || message.role === "tool") return undefined;
   const index = active.session.messages.lastIndexOf(raw as never);
-  // Pi messages don't carry IDs. Index-based IDs stay stable across a reload.
-  message.id = index >= 0 ? `message-${index}` : `message-live-${Date.now()}`;
-  return message;
+  const role = raw && typeof raw === "object" && "role" in raw ? raw.role : undefined;
+  if (index < 0 || (role !== "user" && role !== "assistant")) return undefined;
+  return convertMessages(active.session.messages.slice(0, index + 1)).at(-1);
 }
 
 export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSnapshot?: () => void): void {

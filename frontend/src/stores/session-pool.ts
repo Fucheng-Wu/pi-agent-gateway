@@ -15,6 +15,7 @@ function id(prefix: string) {
 }
 
 function fromSnapshot(snapshot: SessionSnapshot): SessionUiState {
+  const lastMessage = snapshot.messages.at(-1)
   return {
     summary: snapshot.summary,
     messages: [...snapshot.messages],
@@ -22,7 +23,7 @@ function fromSnapshot(snapshot: SessionSnapshot): SessionUiState {
     thinkingLevel: snapshot.thinkingLevel,
     isStreaming: snapshot.isStreaming,
     contextUsage: snapshot.contextUsage,
-    streamMessageId: snapshot.isStreaming ? snapshot.messages.findLast((m) => m.role === 'assistant')?.id : undefined
+    streamMessageId: snapshot.isStreaming && lastMessage?.role === 'assistant' ? lastMessage.id : undefined
   }
 }
 
@@ -234,8 +235,8 @@ export const useSessionPool = defineStore('session-pool', () => {
         break
       case 'tool_update':
       case 'tool_end': {
-        const message = ensureAssistant(state)
-        const tool = message.tools?.find((item) => item.id === event.toolCallId)
+        const message = state.messages.findLast((item) => item.tools?.some((tool) => tool.id === event.toolCallId))
+        const tool = message?.tools?.find((item) => item.id === event.toolCallId)
         if (tool) {
           if (event.output !== undefined) tool.output = event.output
           if (event.type === 'tool_end') tool.status = event.isError ? 'error' : 'done'
@@ -252,7 +253,10 @@ export const useSessionPool = defineStore('session-pool', () => {
           const index = state.messages.findIndex((m) => m.id === state.streamMessageId)
           if (index >= 0) {
             state.messages[index] = incoming
-            state.streamMessageId = undefined
+            // A Pi agent run can contain several assistant messages separated by
+            // tool calls. Keep one live bubble until agent_end so later tool
+            // results and the final answer stay attached to the same turn.
+            state.streamMessageId = incoming.id
             break
           }
         }
@@ -261,6 +265,12 @@ export const useSessionPool = defineStore('session-pool', () => {
       }
       case 'agent_end':
         state.isStreaming = false
+        if (state.streamMessageId) {
+          const message = state.messages.find((item) => item.id === state.streamMessageId)
+          for (const tool of message?.tools ?? []) {
+            if (tool.status === 'running') tool.status = event.error ? 'error' : 'done'
+          }
+        }
         state.streamMessageId = undefined
         if (event.contextUsage) state.contextUsage = event.contextUsage
         if (event.error) {

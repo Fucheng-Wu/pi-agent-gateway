@@ -32,11 +32,11 @@ async function copyText() {
       </div>
       <div :class="message.role === 'user' ? 'rounded-2xl rounded-tr-md border border-accent-400/15 bg-accent-400/[.105] px-4 py-3 text-slate-100' : 'text-slate-200'">
         <ThinkingPanel v-if="message.thinking" :text="message.thinking" :streaming="streaming && !message.text" />
+        <ToolCard v-for="tool in message.tools" :key="tool.id" :tool="tool" />
         <div v-if="message.text" class="markdown text-[13.5px] sm:text-sm" v-html="rendered" />
         <div v-else-if="streaming && !message.thinking && !message.tools?.length" class="flex h-5 items-center gap-1.5" aria-label="正在回复">
           <span v-for="i in 3" :key="i" class="typing-dot h-1.5 w-1.5 rounded-full bg-accent-300" :style="{ animationDelay: `${i * 0.16}s` }" />
         </div>
-        <ToolCard v-for="tool in message.tools" :key="tool.id" :tool="tool" />
         <div v-if="message.error" class="mt-3 rounded-lg border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs text-rose-300">{{ message.error }}</div>
       </div>
       <div v-if="message.role !== 'user' && message.text && !streaming" class="mt-2 flex h-6 items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">

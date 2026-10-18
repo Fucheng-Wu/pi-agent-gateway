@@ -45,6 +45,7 @@ function toolOutput(value: unknown): string {
 export function convertMessages(messages: readonly unknown[]): ChatMessage[] {
   const converted: ChatMessage[] = [];
   const tools = new Map<string, ToolCall>();
+  let assistantTurn: ChatMessage | undefined;
 
   messages.forEach((raw, index) => {
     const item = record(raw);
@@ -53,6 +54,7 @@ export function convertMessages(messages: readonly unknown[]): ChatMessage[] {
     const at = timestamp(item.timestamp);
 
     if (item.role === "user") {
+      assistantTurn = undefined;
       converted.push({ id, role: "user", text: contentText(item.content), timestamp: at });
       return;
     }
@@ -79,15 +81,20 @@ export function convertMessages(messages: readonly unknown[]): ChatMessage[] {
         }
       }
       const error = item.stopReason === "error" ? string(item.errorMessage) ?? "Model error" : undefined;
-      converted.push({
-        id,
-        role: "assistant",
-        text: text.join(""),
-        thinking: thinking.join(""),
-        tools: calls.length ? calls : undefined,
-        timestamp: at,
-        error,
-      });
+      if (!assistantTurn) {
+        assistantTurn = {
+          id,
+          role: "assistant",
+          text: "",
+          timestamp: at,
+        };
+        converted.push(assistantTurn);
+      }
+      assistantTurn.text += text.join("");
+      const nextThinking = thinking.join("");
+      if (nextThinking) assistantTurn.thinking = (assistantTurn.thinking ?? "") + nextThinking;
+      if (calls.length) assistantTurn.tools = [...(assistantTurn.tools ?? []), ...calls];
+      if (error) assistantTurn.error = error;
       return;
     }
 
@@ -99,6 +106,7 @@ export function convertMessages(messages: readonly unknown[]): ChatMessage[] {
         call.output = output;
         call.status = item.isError === true ? "error" : "done";
       } else if (output) {
+        assistantTurn = undefined;
         converted.push({ id, role: "tool", text: output, timestamp: at });
       }
     }
