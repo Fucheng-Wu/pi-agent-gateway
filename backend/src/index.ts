@@ -382,8 +382,8 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
 }
 
 const app = new Hono();
-app.get("/api/health", (context) => context.json({ ok: true, service: "learn-pi-backend" }));
-app.get("/", (context) => context.text("learn-pi backend is running"));
+app.get("/api/health", (context) => context.json({ ok: true, service: "pi-agent-gateway" }));
+app.get("/", (context) => context.text("Pi Agent Gateway is running"));
 
 const server = serve({ fetch: app.fetch, hostname: host, port });
 const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
@@ -451,4 +451,4 @@ function shutdown(): void {
 }
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
-console.log(`learn-pi backend listening on http://${host}:${port} (Pi cwd: ${workspace})`);
+console.log(`Pi Agent Gateway listening on http://${host}:${port} (Pi cwd: ${workspace})`);

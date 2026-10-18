@@ -132,7 +132,7 @@ export class ModelManager {
   }
 
   private async createDraftRuntime(providerName: string, provider: Record<string, unknown>, model: Record<string, unknown>): Promise<{ runtime: ModelRuntime; tempDir: string }> {
-    const tempDir = await mkdtemp(join(tmpdir(), "pi-web-model-config-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "pi-agent-gateway-model-config-"));
     const modelsPath = join(tempDir, "models.json");
     try {
       await writeFile(modelsPath, JSON.stringify({ providers: { [providerName]: { ...provider, models: [model] } } }, null, 2), "utf8");

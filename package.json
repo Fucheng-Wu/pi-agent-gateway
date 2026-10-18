@@ -1,5 +1,5 @@
 {
-  "name": "learn-pi",
+  "name": "pi-agent-gateway",
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@10.22.0",

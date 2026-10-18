@@ -2,7 +2,7 @@ import { readonly, ref } from 'vue'
 
 type Theme = 'dark' | 'light'
 
-const STORAGE_KEY = 'pi-studio-theme'
+const STORAGE_KEY = 'pi-agent-gateway-theme'
 const theme = ref<Theme>(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark')
 
 function setTheme(next: Theme) {

@@ -39,7 +39,7 @@ function timeLabel(summary: SessionSummary) {
         <Bolt :size="19" :stroke-width="2.5" />
         <span class="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border-2 border-ink-900 bg-emerald-400" />
       </div>
-      <div class="min-w-0 flex-1"><div class="text-[15px] font-bold tracking-tight text-white">Pi Studio</div><div class="mono text-[10px] text-slate-500">AGENT WORKSPACE</div></div>
+      <div class="min-w-0 flex-1"><div class="text-[15px] font-bold tracking-tight text-white">Pi Agent Gateway</div><div class="mono text-[10px] text-slate-500">AGENT GATEWAY</div></div>
       <button type="button" class="rounded-lg p-1.5 text-slate-500 hover:bg-white/5 hover:text-white lg:hidden" aria-label="关闭侧栏" @click="emit('close')"><X :size="17" /></button>
     </div>
 

@@ -1,6 +1,8 @@
-# learn-pi
+# Pi Agent Gateway
 
-基于 pi SDK 的本地 Web 聊天界面。前端使用 Vue 3、Pinia、Vite 和 Tailwind；后端使用 Hono、WebSocket 和 `@earendil-works/pi-coding-agent`。前后端共用 `shared/types.ts` 中的消息协议。
+可嵌入现有系统的 Pi Agent 后端，并附带前后端分离的 Web 控制台。
+
+后端基于 Hono、WebSocket 和 `@earendil-works/pi-coding-agent`，能够作为独立 Agent 服务运行或提取后嵌入其他系统；前端使用 Vue 3、Pinia、Vite 和 Tailwind，是该服务的一套参考客户端。前后端通过 `shared/types.ts` 中的版本化消息协议通信。
 
 ## 启动
 

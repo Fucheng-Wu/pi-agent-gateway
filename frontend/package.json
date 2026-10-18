@@ -1,5 +1,5 @@
 {
-  "name": "@learn-pi/frontend",
+  "name": "@pi-agent-gateway/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",

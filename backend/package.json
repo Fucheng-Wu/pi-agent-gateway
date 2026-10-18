@@ -1,5 +1,5 @@
 {
-  "name": "@learn-pi/backend",
+  "name": "@pi-agent-gateway/server",
   "private": true,
   "type": "module",
   "scripts": {
