@@ -8,6 +8,7 @@ import ContextUsageIndicator from './ContextUsageIndicator.vue'
 import MessageBubble from './MessageBubble.vue'
 import ModelSelector from './ModelSelector.vue'
 import ThinkingLevelSelector from './ThinkingLevelSelector.vue'
+import PrimaryAgentSelector from './PrimaryAgentSelector.vue'
 
 const props = defineProps<{ session?: SessionUiState; connection: ConnectionState }>()
 const emit = defineEmits<{ menu: [] }>()
@@ -19,7 +20,8 @@ const scrollArea = ref<HTMLDivElement | null>(null)
 const nearBottom = ref(true)
 const suggestions = ['帮我梳理这个项目的架构', '解释一段代码的工作原理', '一起制定一个实现计划']
 
-const canSend = computed(() => !!props.session && props.connection === 'connected' && !props.session.isStreaming && !!draft.value.trim())
+const changingPrimary = computed(() => !!props.session && !!store.primaryAgentChanging[props.session.summary.id])
+const canSend = computed(() => !!props.session && props.connection === 'connected' && !props.session.isStreaming && !changingPrimary.value && !!draft.value.trim())
 const currentTitle = computed(() => props.session?.summary.title || '新对话')
 const showStreamPlaceholder = computed(() => props.session?.isStreaming && !props.session.messages.some((m) => m.id === props.session?.streamMessageId && m.role === 'assistant'))
 
@@ -33,6 +35,13 @@ function send() {
   }
 }
 function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey && props.session && !props.session.isStreaming && !changingPrimary.value && props.connection === 'connected' && store.primaryAgents.length) {
+    event.preventDefault()
+    const index = store.primaryAgents.findIndex((agent) => agent.id === (props.session?.primaryAgentId || 'build'))
+    const next = (index + (event.shiftKey ? -1 : 1) + store.primaryAgents.length) % store.primaryAgents.length
+    store.setPrimaryAgent(props.session.summary.id, store.primaryAgents[next].id)
+    return
+  }
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault()
     send()
@@ -108,8 +117,9 @@ watch(() => props.session?.isStreaming, () => { if (nearBottom.value) scrollToBo
         <div class="rounded-2xl border border-white/[.12] bg-ink-850 shadow-panel transition-colors focus-within:border-accent-400/40">
           <textarea ref="textarea" v-model="draft" rows="1" :disabled="!session || connection !== 'connected' || session.isStreaming" :placeholder="!session ? '先创建一个对话…' : connection !== 'connected' ? '正在连接服务器…' : session.isStreaming ? 'Pi 正在回复…' : '给 Pi 发送消息…'" class="block max-h-[180px] min-h-[64px] w-full resize-none bg-transparent px-4 pb-2 pt-4 text-[13px] leading-6 text-slate-100 outline-none placeholder:text-slate-600 disabled:opacity-60 sm:px-5 sm:text-sm" @input="resizeTextarea" @keydown="onKeydown" />
           <div class="flex min-h-[50px] flex-wrap items-center gap-2 px-3 pb-3 sm:px-4">
-            <ModelSelector :models="store.models" :selected="session?.model" :disabled="!session || session.isStreaming || connection !== 'connected'" @select="setModel" />
-            <ThinkingLevelSelector v-if="session" :selected="session.thinkingLevel" :disabled="session.isStreaming || connection !== 'connected'" @select="setThinking" />
+            <PrimaryAgentSelector :agents="store.primaryAgents" :selected="session?.primaryAgentId" :disabled="!session || session.isStreaming || connection !== 'connected'" :changing="changingPrimary" @select="session && store.setPrimaryAgent(session.summary.id, $event)" />
+            <ModelSelector :models="store.models" :selected="session?.model" :disabled="!session || session.isStreaming || changingPrimary || connection !== 'connected'" @select="setModel" />
+            <ThinkingLevelSelector v-if="session" :selected="session.thinkingLevel" :disabled="session.isStreaming || changingPrimary || connection !== 'connected'" @select="setThinking" />
             <div class="ml-auto flex items-center gap-3">
               <ContextUsageIndicator :usage="session?.contextUsage" />
               <button v-if="session?.isStreaming" type="button" class="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-400/15 text-rose-300 transition hover:bg-rose-400/25" aria-label="取消生成" title="取消生成" @click="store.abort(session.summary.id)"><Square :size="13" fill="currentColor" /></button>
@@ -117,7 +127,7 @@ watch(() => props.session?.isStreaming, () => { if (nearBottom.value) scrollToBo
             </div>
           </div>
         </div>
-        <div class="mt-2 flex items-center justify-between gap-2 px-1 text-[10px] text-slate-600"><span><kbd class="mono">Enter</kbd> 发送 · <kbd class="mono">Shift + Enter</kbd> 换行</span><span class="hidden items-center gap-1 sm:flex"><Bolt :size="10" /> Powered by pi SDK</span></div>
+        <div class="mt-2 flex flex-wrap items-center justify-between gap-2 px-1 text-[10px] text-slate-600"><span><kbd class="mono">Enter</kbd> 发送 · <kbd class="mono">Shift + Enter</kbd> 换行 · <kbd class="mono">Tab</kbd> 切换角色</span><span class="hidden items-center gap-1 sm:flex"><Bolt :size="10" /> Powered by pi SDK</span></div>
       </div>
     </div>
   </section>

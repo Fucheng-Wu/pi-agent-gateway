@@ -19,6 +19,8 @@ import {
   type SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { createPermissionExtension, parsePermissions, type PermissionBroker, type RoleRuntime } from "./permissions.js";
+import type { PrimaryAgentRegistry } from "./primary-agents.js";
 import type {
   FeatureSettings,
   McpConfigInfo,
@@ -131,6 +133,7 @@ function parseCustomProfile(content: string, filePath: string, scope: "global" |
     builtIn: false,
     scope,
     filePath,
+    permissions: parsePermissions(frontmatterValue(block[1], "permissions")),
   };
 }
 
@@ -183,6 +186,8 @@ export class FeatureManager {
     private readonly settingsManager: SettingsManager,
     private readonly modelRuntime: ModelRuntime,
     private readonly backendDir: string,
+    private readonly permissionBroker: PermissionBroker,
+    private readonly primaryAgents: PrimaryAgentRegistry,
   ) {
     this.packageManager = new DefaultPackageManager({
       cwd,
@@ -275,7 +280,11 @@ export class FeatureManager {
     const maxConcurrent = Number.isInteger(stored.maxConcurrent) && Number(stored.maxConcurrent) >= 1 && Number(stored.maxConcurrent) <= MAX_SUBAGENTS
       ? Number(stored.maxConcurrent)
       : 3;
-    const custom = await this.readCustomProfiles();
+    const shared = (await this.primaryAgents.list()).filter((profile) => profile.mode === "all").map((profile) => ({
+      ...profile, scope: pathWithin(join(this.agentDir, "primary-agents"), profile.filePath ?? "") ? "global" as const : "project" as const,
+      extensions: profile.extensions, managedByPrimary: true,
+    }));
+    const custom = [...new Map([...await this.readCustomProfiles(), ...shared].map((profile) => [profile.id.toLowerCase(), profile])).values()];
     const reserved = new Set(custom.map((profile) => profile.id.toLowerCase()));
     const profiles = [
       ...SUBAGENT_PROFILES.filter((profile) => !reserved.has(profile.id.toLowerCase())),
@@ -353,7 +362,7 @@ export class FeatureManager {
 
   async deleteSubagentProfile(profileId: string): Promise<void> {
     const profile = (await this.getSubagentSettings()).profiles.find((item) => item.id === profileId);
-    if (!profile || profile.builtIn || !profile.filePath) throw new Error("只能删除自定义子代理");
+    if (!profile || profile.builtIn || profile.managedByPrimary || !profile.filePath) throw new Error("只能删除独立定义的自定义子代理；共享角色请在主代理目录管理");
     const allowedRoots = [resolve(this.globalAgentsDir), resolve(this.projectAgentsDir)];
     const target = resolve(await realpath(profile.filePath));
     if (!allowedRoots.some((root) => pathWithin(root, target))) throw new Error("子代理文件不在允许的目录中");
@@ -376,7 +385,7 @@ export class FeatureManager {
     });
   }
 
-  private createSubagentExtension(): ExtensionFactory {
+  private createSubagentExtension(runtime: RoleRuntime): ExtensionFactory {
     return async (pi) => {
       const settings = await this.getSubagentSettings();
       if (!settings.enabled) return;
@@ -399,6 +408,9 @@ export class FeatureManager {
           if (!latest.enabled) throw new Error("子代理功能已关闭");
           const profile = latest.profiles.find((item) => item.id === params.profile && item.enabled);
           if (!profile) throw new Error(`子代理角色不可用：${params.profile}`);
+          if (runtime.profile.id === "plan" && (profile.extensions.length > 0 || profile.tools.some((tool) => !["read", "grep", "find", "ls"].includes(tool)))) {
+            throw new Error("Plan 只能委派不含扩展的只读子代理，请切换到 Build 后执行修改任务");
+          }
           if (!ctx.model) throw new Error("当前会话尚未选择模型");
           if (this.activeSubagents >= latest.maxConcurrent) throw new Error(`子代理并发已达到上限 ${latest.maxConcurrent}`);
           if (signal?.aborted) throw new Error("子代理任务已取消");
@@ -414,6 +426,7 @@ export class FeatureManager {
               settingsManager: this.settingsManager,
               noExtensions: true,
               additionalExtensionPaths: this.profileExtensionPaths(profile),
+              extensionFactories: [createPermissionExtension(runtime, this.permissionBroker, ctx.cwd, profile)],
               additionalSkillPaths: [this.projectSkillsDir],
               skillsOverride: (current) => ({
                 skills: allowedSkills.has("*") ? current.skills : current.skills.filter((skill) => allowedSkills.has(skill.name)),
@@ -435,6 +448,7 @@ export class FeatureManager {
               tools: profile.tools,
             });
             childSession = created.session;
+            await childSession.bindExtensions({});
             abort = () => { void childSession?.abort(); };
             signal?.addEventListener("abort", abort, { once: true });
             await childSession.prompt(params.task);
@@ -453,22 +467,28 @@ export class FeatureManager {
     };
   }
 
-  extensionFactories(): InlineExtension[] {
+  extensionFactories(runtime: RoleRuntime): InlineExtension[] {
     return [
       { name: "codemode", factory: createCodemodeExtension(), replaceable: true, builtin: true },
       { name: "tool-search", factory: createToolSearchExtension(), replaceable: true, builtin: true },
       { name: "mcp", factory: createMcpExtension(), replaceable: true, builtin: true },
-      { name: "subagents", factory: this.createSubagentExtension(), replaceable: true, builtin: true },
+      { name: "subagents", factory: this.createSubagentExtension(runtime), replaceable: true, builtin: true },
+      createPermissionExtension(runtime, this.permissionBroker, this.cwd),
     ];
   }
 
-  async createResourceLoader(): Promise<ResourceLoader> {
+  async createResourceLoader(runtime: RoleRuntime): Promise<ResourceLoader> {
     const loader = new DefaultResourceLoader({
       cwd: this.cwd,
       agentDir: this.agentDir,
       settingsManager: this.settingsManager,
       additionalSkillPaths: [this.projectSkillsDir],
-      extensionFactories: this.extensionFactories(),
+      additionalExtensionPaths: runtime.profile.extensions,
+      extensionFactories: this.extensionFactories(runtime),
+      appendSystemPrompt: [runtime.profile.systemPrompt],
+      skillsOverride: ({ skills, diagnostics }) => ({
+        skills: runtime.profile.skills.includes("*") ? skills : skills.filter((skill) => runtime.profile.skills.includes(skill.name)), diagnostics,
+      }),
     });
     await loader.reload();
     return loader;

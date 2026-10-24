@@ -16,7 +16,10 @@ backend/subagents/
 - `tools`：允许的内置或扩展工具名；支持 Pi 的工具匹配模式。
 - `skills`：只加载列出的技能名；`["*"]` 表示加载全部已发现技能。
 - `extensions`：相对于 `agent.md` 的 Pi 扩展模块。扩展必须位于该子 agent 目录中，可以注册专属工具。
+- `permissions`：可选的单行 JSON 权限规则数组（action/resource/effect）；子代理执行时同时受当前主代理策略约束，不能通过自身 allow 覆盖主代理的 deny。
 
 复制 `_template` 目录，改名后把 `agent.md.example` 改成 `agent.md`。如果不需要专属工具，删除 `extensions` 并移除 `tools` 中对应的工具名即可。
 
 `settings.json` 控制总开关、并发上限和禁用角色。设置页修改后也会写回此文件。
+
+主代理配置见 [primary-agents](../primary-agents/README.md)。其中 `mode: all` 的角色同时可作为子代理调用。需要确认的子代理操作在主任务所属浏览器弹出确认，显示具体角色；取消主任务会一并取消审批。当前仍使用内存子会话，暂不支持续跑。

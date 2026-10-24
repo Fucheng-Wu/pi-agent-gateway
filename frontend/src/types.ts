@@ -17,6 +17,7 @@ export type {
   ThinkingLevel,
   ToolCall
 } from '../../shared/types'
+export type { PrimaryAgentInfo, PermissionRequest, PermissionDecision, PermissionRule } from '../../shared/types'
 export { PROTOCOL_VERSION } from '../../shared/types'
 
 import type { ChatMessage, ContextUsage, SessionSummary, ThinkingLevel } from '../../shared/types'
@@ -29,6 +30,7 @@ export interface SessionUiState {
   isStreaming: boolean
   contextUsage?: ContextUsage
   streamMessageId?: string
+  primaryAgentId?: string
 }
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'

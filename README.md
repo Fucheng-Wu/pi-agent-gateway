@@ -33,6 +33,8 @@ pnpm dev
 
 界面支持多会话、会话文件恢复、流式回复、思维过程、工具执行记录、模型和思考强度切换。侧栏“设置”统一提供模型配置与 Provider 认证，并可新增和管理技能、插件、子代理及 MCP 服务；这些能力直接接入 `@earendil-works/pi-coding-agent` 的资源加载器与扩展运行时。进程内最多保留 5 个活跃 AgentSession；被淘汰的会话仍可从 pi 的 JSONL 文件恢复。
 
+输入框底部的主代理选择器位于模型选择器左侧，默认 Build，也可选择 Plan；输入框内 Tab / Shift+Tab 可循环切换。切换保留会话历史、模型和思考强度，角色随会话恢复。需要确认的文件修改、命令或外部工具会弹出权限确认窗口，支持本次允许、本会话允许和拒绝。内置行为、自定义角色以及权限格式见 [主代理配置](./backend/primary-agents/README.md)。子代理暂不支持续跑。
+
 pi 只会在首次产生助手消息后写出会话文件，因此尚未开始回复的空对话在后端重启后不会保留。
 
 ## 模型配置
@@ -73,6 +75,7 @@ Agent 的实时输出是扁平顶层事件，不再使用 `session_event.event` 
 ```powershell
 pnpm typecheck
 pnpm build
+pnpm --filter ./backend test
 ```
 
 `pnpm build` 会检查后端类型并构建前端静态文件。开发模式下后端通过 `tsx` 运行。连接到已启动的后端后，可执行 `pnpm smoke` 检查 WebSocket 的会话创建、读取、删除和认证挑战；该命令会创建并删除一个测试空会话。

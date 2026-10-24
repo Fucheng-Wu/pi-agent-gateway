@@ -1,6 +1,40 @@
 /** Messages exchanged over /ws. Every command can carry a requestId for error correlation. */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export interface PermissionRule {
+  action: string;
+  resource: string;
+  effect: "allow" | "ask" | "deny";
+}
+
+export interface PrimaryAgentInfo {
+  id: string;
+  name: string;
+  description: string;
+  mode: "primary" | "all";
+  systemPrompt: string;
+  tools: string[];
+  skills: string[];
+  extensions: string[];
+  permissions: PermissionRule[];
+  builtIn: boolean;
+  filePath?: string;
+}
+
+export interface PermissionRequest {
+  id: string;
+  sessionId: string;
+  agentId: string;
+  agentName: string;
+  toolName: string;
+  resource: string;
+  input: unknown;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export type PermissionDecision = "allow_once" | "allow_session" | "deny";
+
 export interface SessionSummary {
   id: string;
   title: string;
@@ -96,6 +130,8 @@ export interface SubagentProfileInfo {
   builtIn: boolean;
   scope: "builtin" | "global" | "project";
   filePath?: string;
+  permissions?: PermissionRule[];
+  managedByPrimary?: boolean;
 }
 
 export interface SubagentSettingsInfo {
@@ -126,6 +162,7 @@ export interface SessionSnapshot {
   thinkingLevel: ThinkingLevel;
   isStreaming: boolean;
   contextUsage?: ContextUsage;
+  primaryAgentId?: string;
 }
 
 export const PROTOCOL_VERSION = 1 as const;
@@ -144,7 +181,7 @@ export type AgentUiEvent =
   | { type: "tool_end"; sessionId: string; toolCallId: string; output?: string; isError?: boolean }
   | { type: "message_end"; sessionId: string; message: ChatMessage }
   | { type: "agent_end"; sessionId: string; contextUsage?: ContextUsage; error?: string }
-  | { type: "session_updated"; sessionId: string; summary?: SessionSummary; model?: { provider: string; id: string }; thinkingLevel?: ThinkingLevel; contextUsage?: ContextUsage };
+  | { type: "session_updated"; sessionId: string; summary?: SessionSummary; model?: { provider: string; id: string }; thinkingLevel?: ThinkingLevel; contextUsage?: ContextUsage; primaryAgentId?: string };
 
 type CommandBase = { requestId?: string };
 
@@ -153,6 +190,9 @@ export type ClientMessage = CommandBase & (
   | { type: "ping" }
   | { type: "list_sessions" }
   | { type: "create_session" }
+  | { type: "list_primary_agents" }
+  | { type: "set_primary_agent"; sessionId: string; agentId: string }
+  | { type: "permission_response"; permissionId: string; decision: PermissionDecision }
   | { type: "load_session"; sessionId: string }
   | { type: "delete_session"; sessionId: string }
   | { type: "prompt"; sessionId: string; text: string }
@@ -181,7 +221,10 @@ export type ClientMessage = CommandBase & (
 );
 
 export type ServerMessage = (
-  | { type: "init"; protocolVersion: typeof PROTOCOL_VERSION; sessions: SessionSummary[]; models: ModelInfo[]; providers: ProviderInfo[]; settings: FeatureSettings }
+  | { type: "init"; protocolVersion: typeof PROTOCOL_VERSION; sessions: SessionSummary[]; models: ModelInfo[]; providers: ProviderInfo[]; settings: FeatureSettings; primaryAgents?: PrimaryAgentInfo[] }
+  | { type: "primary_agents"; agents: PrimaryAgentInfo[] }
+  | { type: "permission_request"; permission: PermissionRequest }
+  | { type: "permission_resolved"; permissionId: string; sessionId: string; decision: PermissionDecision; reason?: string }
   | { type: "pong" }
   | { type: "sessions"; sessions: SessionSummary[] }
   | { type: "session_created"; session: SessionSnapshot }

@@ -7,6 +7,8 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { FeatureManager } from "./feature-manager.js";
+import { PermissionBroker } from "./permissions.js";
+import { PrimaryAgentRegistry } from "./primary-agents.js";
 
 export interface SharedResources {
   modelRuntime: ModelRuntime;
@@ -16,6 +18,8 @@ export interface SharedResources {
   agentDir: string;
   cwd: string;
   backendDir: string;
+  permissions: PermissionBroker;
+  primaryAgents: PrimaryAgentRegistry;
 }
 
 export async function createSharedResources(cwd: string): Promise<SharedResources> {
@@ -27,6 +31,8 @@ export async function createSharedResources(cwd: string): Promise<SharedResource
   });
   const modelRegistry = new ModelRegistry(modelRuntime);
   const settingsManager = SettingsManager.create(cwd, agentDir);
-  const features = new FeatureManager(cwd, agentDir, settingsManager, modelRuntime, backendDir);
-  return { modelRuntime, modelRegistry, settingsManager, features, agentDir, cwd, backendDir };
+  const permissions = new PermissionBroker();
+  const primaryAgents = new PrimaryAgentRegistry(backendDir, agentDir);
+  const features = new FeatureManager(cwd, agentDir, settingsManager, modelRuntime, backendDir, permissions, primaryAgents);
+  return { modelRuntime, modelRegistry, settingsManager, features, agentDir, cwd, backendDir, permissions, primaryAgents };
 }

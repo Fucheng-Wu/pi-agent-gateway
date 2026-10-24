@@ -4,6 +4,7 @@ import type {
   AgentUiEvent, ChatMessage, ClientMessage, FeatureSettings, ModelInfo, ProviderInfo, ServerMessage,
   SessionSnapshot, SessionSummary, SessionUiState, SubagentProfileInfo, ThinkingLevel, ToolCall
 } from '@/types'
+import type { PrimaryAgentInfo, PermissionRequest, PermissionDecision } from '@/types'
 import { PROTOCOL_VERSION } from '@/types'
 
 type Sender = (message: ClientMessage) => boolean
@@ -23,6 +24,7 @@ function fromSnapshot(snapshot: SessionSnapshot): SessionUiState {
     thinkingLevel: snapshot.thinkingLevel,
     isStreaming: snapshot.isStreaming,
     contextUsage: snapshot.contextUsage,
+    primaryAgentId: snapshot.primaryAgentId ?? 'build',
     streamMessageId: snapshot.isStreaming && lastMessage?.role === 'assistant' ? lastMessage.id : undefined
   }
 }
@@ -32,6 +34,11 @@ export const useSessionPool = defineStore('session-pool', () => {
   const sessionStates = ref<Record<string, SessionUiState>>({})
   const activeSessionId = ref<string | null>(null)
   const models = ref<ModelInfo[]>([])
+  const primaryAgents = ref<PrimaryAgentInfo[]>([])
+  const primaryAgentChanging = ref<Record<string, boolean>>({})
+  const primaryAgentRequests = new Map<string, string>()
+  const permissionRequests = ref<PermissionRequest[]>([])
+  const permissionResponding = ref<Record<string, boolean>>({})
   const providers = ref<ProviderInfo[]>([])
   const modelsConfig = ref('')
   const configLoaded = ref(false)
@@ -107,6 +114,10 @@ export const useSessionPool = defineStore('session-pool', () => {
     modelTest.value.loading = false
     featureSettingsLoading.value = false
     featureAction.value = null
+    primaryAgentChanging.value = {}
+    primaryAgentRequests.clear()
+    permissionRequests.value = []
+    permissionResponding.value = {}
   }
   function selectSession(sessionId: string) {
     activeSessionId.value = sessionId
@@ -131,6 +142,20 @@ export const useSessionPool = defineStore('session-pool', () => {
   }
   function setThinkingLevel(sessionId: string, level: ThinkingLevel) {
     return dispatch({ type: 'set_thinking_level', sessionId, level })
+  }
+  function setPrimaryAgent(sessionId: string, agentId: string) {
+    if (primaryAgentChanging.value[sessionId] || sessionStates.value[sessionId]?.isStreaming) return false
+    primaryAgentChanging.value[sessionId] = true
+    const requestId = id('role')
+    primaryAgentRequests.set(sessionId, requestId)
+    if (!dispatch({ type: 'set_primary_agent', sessionId, agentId, requestId })) { delete primaryAgentChanging.value[sessionId]; primaryAgentRequests.delete(sessionId); return false }
+    return true
+  }
+  function respondPermission(permissionId: string, decision: PermissionDecision) {
+    if (permissionResponding.value[permissionId]) return false
+    permissionResponding.value[permissionId] = true
+    if (!dispatch({ type: 'permission_response', permissionId, decision })) { delete permissionResponding.value[permissionId]; return false }
+    return true
   }
   function login(providerId: string, methodId?: string) {
     authChallenge.value = null
@@ -280,6 +305,7 @@ export const useSessionPool = defineStore('session-pool', () => {
         }
         break
       case 'session_updated':
+        if (event.primaryAgentId) state.primaryAgentId = event.primaryAgentId
         if (event.summary) {
           state.summary = event.summary
           upsertSummary(event.summary)
@@ -297,13 +323,17 @@ export const useSessionPool = defineStore('session-pool', () => {
     else sessions.value.push(summary)
   }
 
-  function installSnapshot(snapshot: SessionSnapshot) {
+  function installSnapshot(snapshot: SessionSnapshot, requestId?: string) {
     const sessionId = snapshot.summary.id
     const existing = sessionStates.value[sessionId]
     const hasLiveEventsSinceRequest = (revisions.get(sessionId) ?? 0) > (loadRevisions.get(sessionId) ?? Number.POSITIVE_INFINITY)
     // WS events can overtake a load response. In that case the live state is newer,
     // even if both arrays happen to contain the same number of messages.
     const state = existing && hasLiveEventsSinceRequest ? existing : fromSnapshot(snapshot)
+    if (requestId && primaryAgentRequests.get(sessionId) === requestId) {
+      delete primaryAgentChanging.value[sessionId]
+      primaryAgentRequests.delete(sessionId)
+    }
     if (state !== existing) sessionStates.value[sessionId] = state
     else if (!existing?.summary.updatedAt || snapshot.summary.updatedAt > existing.summary.updatedAt) state.summary = snapshot.summary
     upsertSummary(state.summary)
@@ -321,6 +351,9 @@ export const useSessionPool = defineStore('session-pool', () => {
       case 'init': {
         sessions.value = message.sessions
         models.value = message.models
+        primaryAgents.value = message.primaryAgents ?? []
+        permissionRequests.value = []
+        permissionResponding.value = {}
         providers.value = message.providers
         featureSettings.value = message.settings
         featureSettingsLoading.value = false
@@ -336,17 +369,19 @@ export const useSessionPool = defineStore('session-pool', () => {
         if (!activeSessionId.value && message.sessions.length) selectSession([...message.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0].id)
         break
       case 'session_created':
-        installSnapshot(message.session)
+        installSnapshot(message.session, message.requestId)
         activeSessionId.value = message.session.summary.id
         break
       case 'session_state':
-        installSnapshot(message.session)
+        installSnapshot(message.session, message.requestId)
         break
       case 'session_deleted':
         sessions.value = sessions.value.filter((s) => s.id !== message.sessionId)
         delete sessionStates.value[message.sessionId]
         pendingEvents.delete(message.sessionId)
         loadingSessions.delete(message.sessionId)
+        delete primaryAgentChanging.value[message.sessionId]
+        permissionRequests.value = permissionRequests.value.filter((item) => item.sessionId !== message.sessionId)
         if (activeSessionId.value === message.sessionId) {
           activeSessionId.value = null
           if (sessions.value.length) selectSession(sortedSessions.value[0].id)
@@ -374,6 +409,15 @@ export const useSessionPool = defineStore('session-pool', () => {
         break
       }
       case 'models': models.value = message.models; break
+      case 'primary_agents': primaryAgents.value = message.agents; break
+      case 'permission_request':
+        if (!permissionRequests.value.some((item) => item.id === message.permission.id)) permissionRequests.value.push(message.permission)
+        break
+      case 'permission_resolved':
+        permissionRequests.value = permissionRequests.value.filter((item) => item.id !== message.permissionId)
+        delete permissionResponding.value[message.permissionId]
+        if (message.reason && message.reason.includes('超时')) tell(message.reason)
+        break
       case 'providers': providers.value = message.providers; break
       case 'models_config': modelsConfig.value = message.content; configLoaded.value = true; break
       case 'models_saved':
@@ -405,6 +449,11 @@ export const useSessionPool = defineStore('session-pool', () => {
         tell(`${({ skills: '技能', plugins: '插件', subagents: '子代理', mcp: 'MCP' } as const)[message.category]}设置已更新`, 'success')
         break
       case 'error':
+        if (message.sessionId && message.requestId === primaryAgentRequests.get(message.sessionId)) {
+          delete primaryAgentChanging.value[message.sessionId]
+          primaryAgentRequests.delete(message.sessionId)
+        }
+        permissionResponding.value = {}
         configSaving.value = false
         modelDiscovery.value.loading = false
         modelTest.value.loading = false
@@ -419,6 +468,7 @@ export const useSessionPool = defineStore('session-pool', () => {
 
   return {
     sessions, sortedSessions, sessionStates, activeSessionId, activeSession, models, providers,
+    primaryAgents, primaryAgentChanging, permissionRequests, permissionResponding, setPrimaryAgent, respondPermission,
     modelsConfig, configLoaded, configSaving, modelDiscovery, modelTest, authChallenge, authStatus,
     featureSettings, featureSettingsLoading, featureAction, notice, setSender,
     initialize, refreshSessions, refreshModels, refreshProviders, fetchModelsConfig, saveModelsConfig, discoverProviderModels, testModelConfig,
