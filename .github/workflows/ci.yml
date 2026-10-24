@@ -41,3 +41,5 @@ jobs:
         run: pnpm build
       - name: Backend tests
         run: pnpm --filter ./backend test
+      - name: Frontend tests
+        run: pnpm test:frontend

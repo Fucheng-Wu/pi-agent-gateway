@@ -13,6 +13,7 @@
     "dev": "concurrently -k -n backend,frontend \"pnpm --filter ./backend dev\" \"pnpm --filter ./frontend dev\"",
     "build": "pnpm --filter ./backend build && pnpm --filter ./frontend build",
     "typecheck": "pnpm --filter ./backend typecheck && pnpm --filter ./frontend typecheck",
+    "test:frontend": "pnpm --filter ./backend exec tsx --tsconfig ../frontend/tsconfig.json --test ../frontend/test/*.test.ts",
     "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {

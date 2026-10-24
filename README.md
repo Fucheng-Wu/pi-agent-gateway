@@ -35,9 +35,9 @@ Built on `@earendil-works/pi-coding-agent`. This is an independent project, not 
 | Capability | What you can do |
 | --- | --- |
 | Conversations | Create and switch sessions; restore saved Pi JSONL conversations |
-| Live execution | Inspect streaming text, available reasoning output, tool inputs, and results |
+| Live execution | Read reasoning as it streams; it collapses when answer text starts and can be reopened |
 | Plan / Build | Change the primary agent in an idle session without losing history or model selection |
-| Permissions | Allow a requested operation once, allow it for the session, or deny it |
+| Permissions | Routine Build operations run automatically; approve sensitive access once or by a visible session scope |
 | Models | Authenticate built-in providers or configure compatible endpoints; discover models and test connections |
 | Extensions | Manage Skills, plugins, subagent profiles, and MCP configuration from Settings |
 | Custom clients | Consume versioned, session-scoped events over `/ws` |
@@ -142,6 +142,7 @@ Start with the [protocol guide](./docs/protocol.md), the [shared TypeScript cont
 pnpm typecheck
 pnpm build
 pnpm --filter ./backend test
+pnpm test:frontend
 ```
 
 `pnpm build` checks backend types and produces the frontend's static build. It does not create a combined production server. Backend tests include a local mock model provider and do not require a paid model key.

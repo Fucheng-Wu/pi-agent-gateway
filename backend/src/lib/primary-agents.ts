@@ -3,14 +3,26 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import type { PermissionRule, PrimaryAgentInfo } from "../../../shared/types.js";
 import { parsePermissions } from "./permissions.js";
 
-const readPermissions: PermissionRule[] = ["read", "grep", "find", "ls"].map((action) => ({ action, resource: "*", effect: "allow" }));
+const sensitiveReadPermissions: PermissionRule[] = [
+  { action: "read", resource: "*.env", effect: "ask" },
+  { action: "read", resource: "*.env.*", effect: "ask" },
+  { action: "read", resource: "*.env.example", effect: "allow" },
+];
+const readPermissions: PermissionRule[] = [
+  ...["read", "grep", "find", "ls"].map((action): PermissionRule => ({ action, resource: "*", effect: "allow" })),
+  ...sensitiveReadPermissions,
+];
 
 export const BUILTIN_PRIMARY_AGENTS: PrimaryAgentInfo[] = [
   {
     id: "build", name: "Build", description: "实施方案、修改代码并验证结果", mode: "primary", builtIn: true,
     systemPrompt: "你现在处于 Build 模式。之前 Plan 模式的只读约束已解除。根据用户授权实施工作，使用工具并验证结果；需要审批的操作等待用户决定。",
     tools: ["*"], skills: ["*"], extensions: [],
-    permissions: [{ action: "*", resource: "*", effect: "ask" }, ...readPermissions, { action: "Agent", resource: "*", effect: "allow" }],
+    permissions: [
+      { action: "*", resource: "*", effect: "allow" },
+      { action: "external_directory", resource: "*", effect: "ask" },
+      ...sensitiveReadPermissions,
+    ],
   },
   {
     id: "plan", name: "Plan", description: "只读探索、讨论需求和制定实施计划", mode: "primary", builtIn: true,

@@ -42,6 +42,8 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
   const root = await mkdtemp(join(tmpdir(), "pi-gateway-e2e-"));
   const agentDir = join(root, "agent");
   await mkdir(agentDir);
+  await mkdir(join(agentDir, "primary-agents"));
+  await writeFile(join(agentDir, "primary-agents/confirm.md"), '---\nname: confirm\ntools: ["*"]\npermissions: [{"action":"*","resource":"*","effect":"ask"},{"action":"Agent","resource":"*","effect":"allow"}]\n---\nAsk before modifying files.');
   const modelServer = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -55,6 +57,7 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     if (text.includes("plan-write")) args.path = "blocked.txt";
     if (text.includes("cancel-write")) args.path = "cancelled.txt";
     if (text.includes("child-write")) args.path = "child.txt";
+    if (text.includes("confirm-write")) args.path = "confirmed.txt";
     if (text.includes("delegate-write")) { name = "Agent"; args = { profile: "general-purpose", task: "child-write" }; }
     response.writeHead(200, { "content-type": "text/event-stream" });
     const delta = afterTool ? { content: "Finished." } : { tool_calls: [{ index: 0, id: `call_${crypto.randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] };
@@ -78,8 +81,10 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
   const sockets: WebSocket[] = [];
   try {
     const started = Date.now();
-    while (!logs.includes("listening on")) {
+    while (true) {
       if (backend.exitCode !== null || Date.now() - started > 30_000) throw new Error(`Backend did not start: ${logs}`);
+      try { if ((await fetch(`http://127.0.0.1:${port}/api/health`)).ok) break; }
+      catch { /* The startup log can arrive before the socket starts accepting connections. */ }
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 30));
     }
     async function connect() {
@@ -112,15 +117,31 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
 
     from = client.messages.length;
     client.send({ type: "prompt", sessionId, text: "build-write" });
+    await client.wait((item) => item.type === "agent_end", from);
+    assert.equal(client.messages.slice(from).filter((item) => item.type === "permission_request").length, 0);
+    assert.equal(await readFile(join(root, "approved.txt"), "utf8"), "approved");
+
+    from = client.messages.length;
+    client.send({ type: "prompt", sessionId, text: "delegate-write" });
+    await client.wait((item) => item.type === "agent_end", from);
+    assert.equal(client.messages.slice(from).filter((item) => item.type === "permission_request").length, 0);
+    assert.equal(await readFile(join(root, "child.txt"), "utf8"), "approved");
+    await rm(join(root, "child.txt"));
+
+    await client.request({ type: "set_primary_agent", sessionId, agentId: "confirm" }, "session_state");
+    from = client.messages.length;
+    client.send({ type: "prompt", sessionId, text: "confirm-write" });
     const approval = await client.wait((item) => item.type === "permission_request", from);
     if (approval.type !== "permission_request") throw new Error("No approval");
-    await assert.rejects(access(join(root, "approved.txt")));
+    assert.equal(approval.permission.action, "edit");
+    assert.deepEqual(approval.permission.patterns, ["*"]);
+    await assert.rejects(access(join(root, "confirmed.txt")));
     observer.send({ type: "permission_response", permissionId: approval.permission.id, decision: "allow_once" });
     await observer.wait((item) => item.type === "error");
     assert.equal(observer.messages.filter((item) => item.type === "permission_request").length, 0);
     client.send({ type: "permission_response", permissionId: approval.permission.id, decision: "allow_once" });
     await client.wait((item) => item.type === "agent_end", from);
-    assert.equal(await readFile(join(root, "approved.txt"), "utf8"), "approved");
+    assert.equal(await readFile(join(root, "confirmed.txt"), "utf8"), "approved");
 
     from = client.messages.length;
     client.send({ type: "prompt", sessionId, text: "delegate-write" });

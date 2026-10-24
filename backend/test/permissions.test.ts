@@ -128,4 +128,142 @@ test("external search paths require approval and a primary tool allowlist blocks
 test("permission matching uses ordered rules and literal metacharacters", () => {
   assert.equal(permissionEffect([{ action: "*", resource: "*", effect: "deny" }, { action: "read", resource: "src/[a].ts", effect: "allow" }], "read", "src/[a].ts"), "allow");
   assert.equal(permissionEffect([{ action: "read", resource: "src/[a].ts", effect: "allow" }], "read", "src/a.ts"), "ask");
+  assert.equal(permissionEffect([{ action: "*", resource: "*", effect: "allow" }], "bash", "git status\ngit diff"), "allow");
+});
+
+test("Build allows routine tools but asks for sensitive reads and external directories", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-build-defaults-"));
+  const outside = await mkdtemp(join(tmpdir(), "pi-build-outside-"));
+  const broker = new PermissionBroker();
+  broker.setOwner("root", "client");
+  const requests: PermissionRequest[] = [];
+  broker.setNotifier((_owner, message) => {
+    if (message.type === "permission_request") {
+      requests.push(message.permission);
+      broker.respond("client", message.permission.id, "deny");
+    }
+  });
+  try {
+    const root = await guard({ sessionId: "root", profile: BUILTIN_PRIMARY_AGENTS[0], controller: new AbortController() }, cwd, broker);
+    for (const [tool, args] of [
+      ["read", { path: "src/app.ts" }], ["write", { path: "src/app.ts" }], ["edit", { path: "src/other.ts" }],
+      ["bash", { command: "pnpm test" }], ["powershell", { command: "Get-ChildItem" }],
+      ["bash", { command: "git status\ngit diff" }], ["codemode", { code: "const result = await tools.read({ path: 'app.ts' });\nreturn result;" }],
+      ["Agent", { profile: "general-purpose", task: "Explore" }], ["read", { path: ".env.example" }],
+    ] as const) assert.equal(await root(tool, args), undefined);
+    assert.equal(requests.length, 0);
+    for (const path of [".env", "config/.env.local"]) assert.ok((await root("read", { path }) as { block: boolean }).block);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].action, "read");
+    assert.equal(requests[0].patterns, undefined);
+    assert.ok((await root("read", { path: join(outside, "file.txt") }) as { block: boolean }).block);
+    assert.equal(requests.at(-1)?.action, "external_directory");
+    assert.deepEqual(requests.at(-1)?.patterns, [outside.replaceAll("\\", "/"), `${outside.replaceAll("\\", "/")}/*`]);
+  } finally { await rm(cwd, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); }
+});
+
+test("session grants resolve matching queued requests and stay scoped to their agent and session", async () => {
+  const broker = new PermissionBroker();
+  broker.setOwner("root", "client");
+  broker.setOwner("other", "client");
+  const scoped = { ...input, action: "edit", patterns: ["*"] };
+  const signal = new AbortController().signal;
+  const first = broker.ask(scoped, signal);
+  const queued = broker.ask({ ...scoped, toolName: "edit", resource: "src/other.ts" }, signal);
+  const child = broker.ask({ ...scoped, agentId: "build:child" }, signal);
+  const otherSession = broker.ask({ ...scoped, sessionId: "other" }, signal);
+  broker.respond("client", broker.list("client")[0].id, "allow_session");
+  assert.deepEqual(await Promise.all([first, queued]), [true, true]);
+  assert.equal(broker.list("client").length, 2);
+  assert.equal(await broker.ask({ ...scoped, toolName: "edit", resource: "new.ts" }, signal), true);
+  broker.cancelSession("root");
+  broker.cancelSession("other");
+  assert.deepEqual(await Promise.all([child, otherSession]), [false, false]);
+  // Ending a turn keeps grants; switching roles/disposal explicitly clears them.
+  assert.equal(await broker.ask({ ...scoped, resource: "later.ts" }, signal), true);
+  broker.cancelSession("root", "switch", true);
+  broker.setOwner("root", "client");
+  const afterSwitch = broker.ask(scoped, signal);
+  assert.equal(broker.list("client").length, 1);
+  broker.respond("client", broker.list("client")[0].id, "deny");
+  assert.equal(await afterSwitch, false);
+});
+
+test("reject clears the session's pending batch without affecting other sessions", async () => {
+  const broker = new PermissionBroker();
+  const signal = new AbortController().signal;
+  broker.setOwner("root", "client");
+  broker.setOwner("other", "client");
+  const first = broker.ask(input, signal);
+  const second = broker.ask({ ...input, agentId: "build:child" }, signal);
+  const other = broker.ask({ ...input, sessionId: "other" }, signal);
+  broker.respond("client", broker.list("client")[0].id, "deny");
+  assert.deepEqual(await Promise.all([first, second]), [false, false]);
+  assert.deepEqual(broker.list("client").map((item) => item.sessionId), ["other"]);
+  broker.respond("client", broker.list("client")[0].id, "allow_once");
+  assert.equal(await other, true);
+});
+
+test("remembered edit and directory approvals cannot bypass explicit or child deny rules", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-scoped-grants-"));
+  const outside = await mkdtemp(join(tmpdir(), "pi-scoped-external-"));
+  const broker = new PermissionBroker();
+  broker.setOwner("root", "client");
+  const requests: PermissionRequest[] = [];
+  broker.setNotifier((_owner, message) => {
+    if (message.type === "permission_request") {
+      requests.push(message.permission);
+      broker.respond("client", message.permission.id, "allow_session");
+    }
+  });
+  const profile = { ...BUILTIN_PRIMARY_AGENTS[0], permissions: [
+    { action: "*", resource: "*", effect: "allow" },
+    { action: "edit", resource: "*", effect: "ask" },
+    { action: "edit", resource: "secret.txt", effect: "deny" },
+    { action: "external_directory", resource: "*", effect: "ask" },
+  ] as RoleRuntime["profile"]["permissions"] };
+  try {
+    const runtime = { sessionId: "root", profile, controller: new AbortController() };
+    const root = await guard(runtime, cwd, broker);
+    assert.equal(await root("write", { path: "src/first.ts" }), undefined);
+    assert.equal(await root("edit", { path: "src/second.ts" }), undefined);
+    assert.equal(requests.length, 1);
+    assert.ok((await root("write", { path: "secret.txt" }) as { block: boolean }).block);
+    assert.equal(await root("write", { path: join(outside, "one.txt") }), undefined);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].action, "external_directory");
+    assert.equal(await root("read", { path: join(outside, "nested/two.txt") }), undefined);
+    assert.equal(requests.length, 2);
+    assert.equal(await root("read", { path: `${outside}-sibling/three.txt` }), undefined);
+    assert.equal(requests.length, 3);
+    const child = await guard(runtime, cwd, broker, { id: "reader", name: "Reader", tools: ["write"], permissions: [{ action: "*", resource: "*", effect: "deny" }] });
+    assert.ok((await child("write", { path: "src/third.ts" }) as { block: boolean }).block);
+    assert.equal(requests.length, 3);
+  } finally { await rm(cwd, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); }
+});
+
+test("shell session grants cover simple prefixes without approving chained or substituted commands", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-shell-grants-"));
+  const broker = new PermissionBroker();
+  broker.setOwner("root", "client");
+  const requests: PermissionRequest[] = [];
+  broker.setNotifier((_owner, message) => {
+    if (message.type === "permission_request") {
+      requests.push(message.permission);
+      broker.respond("client", message.permission.id, requests.length === 1 ? "allow_session" : "deny");
+    }
+  });
+  const profile = { ...BUILTIN_PRIMARY_AGENTS[0], permissions: [{ action: "*", resource: "*", effect: "ask" as const }] };
+  try {
+    const root = await guard({ sessionId: "root", profile, controller: new AbortController() }, cwd, broker);
+    assert.equal(await root("bash", { command: "git status --short" }), undefined);
+    assert.deepEqual(requests[0].patterns, ["git status", "git status *"]);
+    assert.equal(await root("bash", { command: "git status --porcelain" }), undefined);
+    assert.equal(await root("bash", { command: "git status" }), undefined);
+    assert.equal(requests.length, 1);
+    for (const command of ["git push", "git status; echo unexpected", "git status --short && echo unexpected", "git status $(echo unexpected)", "git status `echo unexpected`", "git status\necho unexpected", "git status > output.txt"]) {
+      assert.ok((await root("bash", { command }) as { block: boolean }).block);
+    }
+    assert.equal(requests.length, 8);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
 });

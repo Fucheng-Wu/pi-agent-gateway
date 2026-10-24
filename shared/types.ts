@@ -28,6 +28,10 @@ export interface PermissionRequest {
   agentName: string;
   toolName: string;
   resource: string;
+  /** Normalized permission, e.g. edit for both write/edit, or external_directory. */
+  action?: string;
+  /** Suggested patterns covered by allow_session. Omitted means the exact resource only. */
+  patterns?: string[];
   input: unknown;
   createdAt: string;
   expiresAt: string;

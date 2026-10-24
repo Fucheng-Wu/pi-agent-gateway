@@ -45,6 +45,7 @@ For code changes, run:
 pnpm typecheck
 pnpm build
 pnpm --filter ./backend test
+pnpm test:frontend
 ```
 
 With a backend running, `pnpm smoke` also checks the handshake and session lifecycle. It creates and deletes its own empty test session and cancels an authentication challenge. Prefer a separate `PI_AGENT_DIR` and workspace when experimenting with tools or credentials.

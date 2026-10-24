@@ -117,7 +117,11 @@ A custom client must handle `permission_request` before using tasks that require
 {"type":"permission_response","permissionId":"ID_FROM_REQUEST","decision":"allow_once"}
 ```
 
-Decisions are `allow_once`, `allow_session`, or `deny`. Session approval is scoped to the current primary agent, subagent, tool, and matching operation target; role changes and backend restarts clear it. Pending approvals are rejected on cancellation, disconnection, or the five-minute timeout. Plan blocks ordinary project file modifications and commands; its exception for explicitly requested plan files is documented in the [primary-agent guide (Chinese)](../backend/primary-agents/README.md).
+Decisions are `allow_once`, `allow_session`, or `deny`. Build allows routine tools by default; file/directory access outside the workspace and sensitive `.env` reads still require approval. Plan blocks ordinary project file modifications and commands.
+
+Requests may include `action` (the normalized permission, such as `edit` or `external_directory`) and `patterns` (the suggested scope of `allow_session`). Display those patterns before approval; absent patterns mean only the exact `resource`. For example, `write` and `edit` can share `edit: *`, directory approval covers its subtree, and simple shell commands can propose `git status` / `git status *`. Complex shell commands require exact approval. File operations and external directory permissions are evaluated independently, and configured denies always remain enforced.
+
+Session approval stays scoped to the current primary agent and subagent; matching pending requests are also resolved. Rejecting a request rejects other pending requests in the same session. Grants are held in memory until a role change, session disposal/eviction, or backend restart. Pending approvals are rejected on cancellation, disconnection, or the five-minute timeout. See the [primary-agent guide (Chinese)](../backend/primary-agents/README.md) for permission configuration and Plan's exception for explicitly requested plan files.
 
 Permission messages are delivered to the initiating connection; they cannot be approved from a separate console connection. Do not silently approve every request in an integration.
 

@@ -8,6 +8,7 @@ const emit = defineEmits<{ decide: [decision: PermissionDecision] }>()
 const dialog = ref<HTMLElement | null>(null)
 let previousFocus: HTMLElement | null = null
 const inputText = computed(() => JSON.stringify(props.request.input, null, 2))
+const approvalScope = computed(() => props.request.patterns?.length ? props.request.patterns : [props.request.resource])
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); if (!props.busy) emit('decide', 'deny') }
   if (event.key !== 'Tab') return
@@ -32,8 +33,13 @@ watch(() => props.request.id, focusDialog)
         <div class="min-h-0 space-y-4 overflow-auto p-5">
           <p id="permission-description" class="text-sm text-slate-300">代理正在等待你的决定。允许后将继续执行，拒绝后会把结果返回给代理。</p>
           <dl class="space-y-2 text-xs"><div><dt class="text-slate-500">工具</dt><dd class="mono mt-1 break-all">{{ request.toolName }}</dd></div><div><dt class="text-slate-500">操作对象</dt><dd class="mono mt-1 whitespace-pre-wrap break-all">{{ request.resource }}</dd></div></dl>
+          <div class="rounded-lg border border-accent-400/15 bg-accent-400/5 p-3 text-xs">
+            <p class="text-slate-300">本会话允许的范围<span v-if="request.action" class="mono text-accent-300"> · {{ request.action }}</span></p>
+            <ul class="mono mt-2 space-y-1 text-slate-400"><li v-for="pattern in approvalScope" :key="pattern" class="whitespace-pre-wrap break-all">{{ pattern }}</li></ul>
+            <p v-if="approvalScope.includes('*')" class="mt-2 text-amber-300">* 表示此类操作的所有对象；明确禁止的操作仍会被阻止，项目外目录仍需单独授权。</p>
+          </div>
           <details><summary class="cursor-pointer text-xs text-slate-400">查看完整参数</summary><pre class="mono mt-2 whitespace-pre-wrap break-all rounded-lg bg-ink-950 p-3 text-xs text-slate-300">{{ inputText }}</pre></details>
-          <p class="text-xs leading-5 text-slate-500">“本会话允许”仅记住当前角色、工具及相同操作对象；切换角色后失效。{{ remaining > 1 ? `还有 ${remaining - 1} 项待确认。` : '' }}</p>
+          <p class="text-xs leading-5 text-slate-500">“本会话允许”会记住当前角色的上述权限范围，并放行匹配的待确认操作；切换角色或关闭会话后失效。拒绝会同时取消本会话其余待确认操作。{{ remaining > 1 ? `还有 ${remaining - 1} 项待确认。` : '' }}</p>
         </div>
         <div class="flex flex-wrap justify-end gap-2 border-t border-white/10 p-4">
           <button type="button" class="rounded-lg border border-white/15 px-3 py-2 text-xs text-slate-300 hover:bg-white/5 disabled:opacity-40" :disabled="busy" @click="emit('decide', 'deny')">拒绝</button>
