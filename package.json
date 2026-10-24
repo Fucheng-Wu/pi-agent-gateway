@@ -1,5 +1,11 @@
 {
   "name": "pi-agent-gateway",
+  "description": "An embeddable backend and web console for Pi Coding Agent.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fucheng-Wu/pi-agent-gateway.git"
+  },
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@10.22.0",

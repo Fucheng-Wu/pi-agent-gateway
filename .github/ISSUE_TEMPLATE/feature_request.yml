@@ -1,0 +1,26 @@
+name: Feature request / 功能建议
+description: Describe a workflow you want to improve. / 描述你希望改进的使用场景。
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: English and Chinese are welcome. A concrete task helps us understand the request. / 支持中文或英文，请尽量描述具体任务。
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Use case / 使用场景
+      description: What are you trying to do, and where does the current project fall short? / 你想完成什么，当前卡在哪里？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior / 期望的行为
+      description: Describe the result you want to see. / 描述你希望实现的效果。
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and context / 替代方案与补充信息
+      description: What have you already tried? A small example or mockup is welcome. / 已尝试过哪些方法？欢迎附最小示例或示意图。

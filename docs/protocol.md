@@ -1,0 +1,132 @@
+# Connect your own client
+
+[English README](../README.md) · [中文 README](../README.zh-CN.md) · [Configuration](./configuration.md)
+
+The backend can run without the Vue console. Its current integration surface is a versioned WebSocket protocol, not an OpenAI-compatible HTTP chat endpoint.
+
+```sh
+pnpm --filter ./backend dev
+```
+
+- Health: `GET http://127.0.0.1:3000/api/health`
+- WebSocket: `ws://127.0.0.1:3000/ws`
+- Source of truth: [`shared/types.ts`](../shared/types.ts)
+- Working Node client with request correlation: [`scripts/smoke.mjs`](../scripts/smoke.mjs)
+
+## 1. Complete the handshake
+
+The first command must be `init` with `protocolVersion: 1`. Other commands receive `INIT_REQUIRED` until the handshake succeeds.
+
+```json
+{"type":"init","protocolVersion":1,"requestId":"init-1"}
+```
+
+The response is another `init` message containing `protocolVersion`, `sessions`, `models`, `providers`, `settings`, and the current `primaryAgents` catalog. Commands may include a `requestId` of up to 128 characters to correlate direct responses and errors. Broadcast lifecycle events are routed by `sessionId` and are not necessarily request-correlated.
+
+This small Node.js 22.19+ example lists catalog counts without creating a session or calling a model. Save it as `catalog.mjs` and run `node catalog.mjs`:
+
+```js
+const socket = new WebSocket('ws://127.0.0.1:3000/ws')
+const timer = setTimeout(() => {
+  console.error('Timed out waiting for the gateway')
+  process.exitCode = 1
+  socket.close()
+}, 10_000)
+
+socket.addEventListener('open', () => {
+  socket.send(JSON.stringify({
+    type: 'init', protocolVersion: 1, requestId: 'catalog-1',
+  }))
+})
+
+socket.addEventListener('message', (event) => {
+  const message = JSON.parse(String(event.data))
+  if (message.type === 'init') {
+    console.log({
+      sessions: message.sessions.length,
+      models: message.models.length,
+      providers: message.providers.length,
+    })
+    socket.close()
+  } else if (message.type === 'error') {
+    console.error(message.message)
+    process.exitCode = 1
+    socket.close()
+  }
+})
+
+socket.addEventListener('error', () => {
+  console.error('Cannot connect to the gateway')
+  process.exitCode = 1
+  clearTimeout(timer)
+  socket.close()
+})
+socket.addEventListener('close', () => clearTimeout(timer))
+```
+
+## 2. Create or load a session
+
+```json
+{"type":"create_session","requestId":"create-1"}
+```
+
+Read the new session ID from `session_created.session.summary.id`. To resume a known session:
+
+```json
+{"type":"load_session","sessionId":"YOUR_SESSION_ID","requestId":"load-1"}
+```
+
+Its `session_state` response contains the conversation snapshot. New sessions use Build by default. For an idle session, select Plan and an authenticated model before prompting:
+
+```json
+{"type":"set_primary_agent","sessionId":"YOUR_SESSION_ID","agentId":"plan","requestId":"role-1"}
+{"type":"set_model","sessionId":"YOUR_SESSION_ID","provider":"YOUR_PROVIDER_ID","modelId":"YOUR_MODEL_ID","requestId":"model-1"}
+```
+
+Wait for the role's `session_state` and model's `session_updated` responses before sending dependent commands. Providers and model IDs must come from your actual catalog. Configure credentials in the console first, or implement the authentication messages in the shared contract.
+
+## 3. Send a task and consume events
+
+```json
+{"type":"prompt","sessionId":"YOUR_SESSION_ID","text":"Explain this project's architecture.","requestId":"prompt-1"}
+```
+
+Execution events are top-level messages, without a nested `session_event.event` envelope. Examples below are individual messages, not an exhaustive or guaranteed event order:
+
+```json
+{"type":"agent_start","sessionId":"YOUR_SESSION_ID"}
+{"type":"text_delta","sessionId":"YOUR_SESSION_ID","delta":"The entry point is..."}
+{"type":"tool_start","sessionId":"YOUR_SESSION_ID","tool":{"id":"tool-1","name":"read","status":"running"}}
+{"type":"tool_end","sessionId":"YOUR_SESSION_ID","toolCallId":"tool-1","output":"..."}
+{"type":"agent_end","sessionId":"YOUR_SESSION_ID"}
+```
+
+Other events include `thinking_delta`, `tool_update`, `message_end`, and `session_updated`. Reasoning availability depends on the model. Multiple sessions can interleave events on the same connection. `agent_end` may include an `error`; clients should also handle `error` messages and connection loss.
+
+To cancel a task:
+
+```json
+{"type":"abort","sessionId":"YOUR_SESSION_ID","requestId":"abort-1"}
+```
+
+## 4. Handle permissions explicitly
+
+A custom client must handle `permission_request` before using tasks that require approval. Display the requested agent, tool, resource, and input to the user, then reply on the **same connection that started the task**:
+
+```json
+{"type":"permission_response","permissionId":"ID_FROM_REQUEST","decision":"allow_once"}
+```
+
+Decisions are `allow_once`, `allow_session`, or `deny`. Session approval is scoped to the current primary agent, subagent, tool, and matching operation target; role changes and backend restarts clear it. Pending approvals are rejected on cancellation, disconnection, or the five-minute timeout. Plan blocks ordinary project file modifications and commands; its exception for explicitly requested plan files is documented in the [primary-agent guide (Chinese)](../backend/primary-agents/README.md).
+
+Permission messages are delivered to the initiating connection; they cannot be approved from a separate console connection. Do not silently approve every request in an integration.
+
+## Connection and deployment notes
+
+- The console uses `ping` / `pong` heartbeats. Reconnecting clients must perform a fresh `init` and load the required session snapshot; the server does not provide an event replay cursor.
+- The current server broadcasts session catalogs and execution events to initialized clients. It is a trusted local service, not a tenant-isolated transport.
+- CLI WebSocket clients may omit `Origin`. Browser clients must use an allowed local origin: `localhost`, `127.0.0.1`, or `[::1]`, on port 5173 or the configured backend port.
+- A different browser origin or remote deployment requires an intentional routing/origin and authentication design. The dev proxy is configured in [`frontend/vite.config.ts`](../frontend/vite.config.ts).
+- `delete_session` deletes the saved conversation file. The smoke script uses it only for its own temporary empty session.
+
+For the full command and event shapes, import the shared types rather than copying this guide's illustrative payloads.

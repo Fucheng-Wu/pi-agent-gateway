@@ -1,0 +1,45 @@
+name: Bug report / 问题反馈
+description: Report something that failed, with steps to reproduce. / 提供可复现的问题。
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        English and Chinese are welcome. Please remove API keys, authentication files, private paths, and conversation contents from logs and screenshots.
+        支持中文或英文。请先移除日志与截图中的密钥、认证文件、私人路径和会话内容。
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened? / 问题描述
+      description: Describe the actual behavior and what you expected. / 描述实际表现与预期结果。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      placeholder: |
+        1. Start the project with ...
+        2. Open ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment / 运行环境
+      description: Include OS, browser, Node.js, pnpm, commit, and provider/API type if relevant. Never include credentials.
+      placeholder: |
+        OS:
+        Browser:
+        node --version:
+        pnpm --version:
+        git rev-parse --short HEAD:
+        Provider / API type (if relevant):
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs or screenshots / 脱敏日志或截图
+      description: Include relevant frontend/backend errors after removing sensitive information. / 附上脱敏后的前后端错误。
