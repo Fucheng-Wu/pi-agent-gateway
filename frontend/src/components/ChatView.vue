@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ArrowDown, ArrowUp, Bot, Menu, Moon, Plus, Square, Sun } from 'lucide-vue-next'
 import { useSessionPool } from '@/stores/session-pool'
 import { useTheme } from '@/composables/useTheme'
+import { useChatScroll } from '@/composables/useChatScroll'
 import type { ConnectionState, SessionUiState, ThinkingLevel } from '@/types'
 import ContextUsageIndicator from './ContextUsageIndicator.vue'
 import MessageBubble from './MessageBubble.vue'
@@ -10,6 +11,7 @@ import ModelSelector from './ModelSelector.vue'
 import ThinkingLevelSelector from './ThinkingLevelSelector.vue'
 import PrimaryAgentSelector from './PrimaryAgentSelector.vue'
 import RunReviewPanel from './RunReviewPanel.vue'
+import SubagentPanel from './SubagentPanel.vue'
 
 const props = defineProps<{ session?: SessionUiState; connection: ConnectionState }>()
 const emit = defineEmits<{ menu: []; workspace: []; settings: [] }>()
@@ -21,10 +23,11 @@ const visibleCount = ref(60)
 const visibleMessages = computed(() => props.session?.messages.slice(-visibleCount.value) ?? [])
 const hiddenCount = computed(() => Math.max(0, (props.session?.messages.length ?? 0) - visibleCount.value))
 const needsModel = computed(() => !store.providers.some((provider) => provider.authenticated) || !store.models.length)
-let scrollFrame: number | undefined
 const textarea = ref<HTMLTextAreaElement | null>(null)
-const scrollArea = ref<HTMLDivElement | null>(null)
-const nearBottom = ref(true)
+const { scrollArea, content, following: nearBottom, scrollToBottom, pause, resume, onScroll, onWheel, onTouchStart, onTouchMove, onScrollKey } = useChatScroll()
+const selectedSubagent = ref<string>()
+const subagents = computed(() => props.session?.messages.flatMap(message => message.tools ?? []).filter(tool => tool.name === 'Agent' || tool.subagent) ?? [])
+const selectedTool = computed(() => subagents.value.find(tool => tool.id === selectedSubagent.value))
 const suggestions = ['帮我梳理这个项目的架构', '解释一段代码的工作原理', '一起制定一个实现计划']
 
 const changingPrimary = computed(() => !!props.session && !!store.primaryAgentChanging[props.session.summary.id])
@@ -38,8 +41,7 @@ function send() {
   if (store.prompt(props.session.summary.id, draft.value)) {
     draft.value = ''
     resizeTextarea()
-    nearBottom.value = true
-    scrollToBottom()
+    resume()
   }
 }
 function onKeydown(event: KeyboardEvent) {
@@ -62,23 +64,13 @@ function resizeTextarea() {
     textarea.value.style.height = `${Math.min(textarea.value.scrollHeight, 180)}px`
   })
 }
-function scrollToBottom() {
-  if (scrollFrame !== undefined) return
-  scrollFrame = requestAnimationFrame(() => {
-    scrollFrame = undefined
-    nextTick(() => { if (scrollArea.value && nearBottom.value) scrollArea.value.scrollTop = scrollArea.value.scrollHeight })
-  })
-}
 async function loadEarlier() {
+  pause()
   const height = scrollArea.value?.scrollHeight ?? 0
   const top = scrollArea.value?.scrollTop ?? 0
   visibleCount.value += 60
   await nextTick()
   if (scrollArea.value) scrollArea.value.scrollTop = top + scrollArea.value.scrollHeight - height
-}
-function onScroll() {
-  if (!scrollArea.value) return
-  nearBottom.value = scrollArea.value.scrollHeight - scrollArea.value.scrollTop - scrollArea.value.clientHeight < 150
 }
 function chooseSuggestion(text: string) {
   draft.value = text
@@ -96,9 +88,9 @@ watch(() => props.session?.summary.id, (next, previous) => {
   if (previous) drafts.set(previous, draft.value)
   draft.value = next ? drafts.get(next) ?? '' : ''
   visibleCount.value = 60
-  nearBottom.value = true
+  selectedSubagent.value = undefined
   resizeTextarea()
-  scrollToBottom()
+  resume()
 })
 watch(() => props.session ? store.recoveredDrafts[props.session.summary.id] : undefined, (text) => {
   if (text && !draft.value && props.session) {
@@ -109,21 +101,22 @@ watch(() => props.session ? store.recoveredDrafts[props.session.summary.id] : un
 })
 watch(() => props.session?.revision, () => { if (nearBottom.value) scrollToBottom() })
 watch(() => props.session?.isStreaming, () => { if (nearBottom.value) scrollToBottom() })
-onUnmounted(() => { if (scrollFrame !== undefined) cancelAnimationFrame(scrollFrame) })
 </script>
 
 <template>
+  <div class="chat-layout flex h-full min-w-0 flex-1" :class="{ 'chat-layout--split': selectedTool }">
   <section class="relative flex h-full min-w-0 flex-1 flex-col bg-ink-950">
     <header class="chat-header flex shrink-0 items-center gap-3 px-4 sm:px-8">
       <button type="button" class="rounded-lg p-1.5 text-slate-400 hover:bg-white/5 hover:text-white lg:hidden" aria-label="打开侧栏" @click="emit('menu')"><Menu :size="20" /></button>
       <div class="min-w-0 flex-1"><h1 class="truncate text-slate-100">{{ session ? currentTitle : 'Pi Agent' }}</h1></div>
+      <span v-if="selectedTool" class="shrink-0 text-xs text-slate-500">主代理</span>
       <button type="button" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-white/5 hover:text-slate-100 focus-ring" :aria-label="theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'" :title="theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'" @click="toggleTheme">
         <Sun v-if="theme === 'dark'" :size="18" /><Moon v-else :size="18" />
       </button>
       <div v-if="connection !== 'connected'" class="text-xs text-amber-300">正在连接…</div>
     </header>
 
-    <div ref="scrollArea" class="min-h-0 flex-1 overflow-y-auto overscroll-contain" @scroll="onScroll">
+    <div ref="scrollArea" tabindex="0" class="min-h-0 flex-1 overflow-y-auto overscroll-contain" @scroll="onScroll" @wheel.passive="onWheel" @touchstart.passive="onTouchStart" @touchmove.passive="onTouchMove" @keydown="onScrollKey">
       <div v-if="!session || session.messages.length === 0" class="chat-welcome mx-auto flex min-h-full flex-col items-center justify-center px-6 py-12 text-center">
         <div class="welcome-mark"><Bot :size="42" :stroke-width="1.4" /></div>
         <h2 class="welcome-title text-slate-100">今天有什么可以帮你？</h2>
@@ -138,15 +131,15 @@ onUnmounted(() => { if (scrollFrame !== undefined) cancelAnimationFrame(scrollFr
           <button v-for="suggestion in suggestions" :key="suggestion" type="button" class="rounded-full border border-white/[.09] bg-white/[.035] px-3.5 py-2 text-xs text-slate-400 transition hover:border-accent-400/30 hover:bg-accent-400/[.07] hover:text-slate-200" @click="chooseSuggestion(suggestion)">{{ suggestion }}</button>
         </div>
       </div>
-      <div v-else class="chat-thread mx-auto w-full">
+      <div v-else ref="content" class="chat-thread mx-auto w-full">
         <button v-if="hiddenCount" class="mb-5 w-full rounded-lg border border-white/10 py-2 text-xs text-accent-300" @click="loadEarlier">加载更早的消息（还有 {{ hiddenCount }} 条）</button>
-        <MessageBubble v-for="message in visibleMessages" :key="message.id" :message="message" :streaming="session.isStreaming && message.id === session.streamMessageId" />
+        <MessageBubble v-for="message in visibleMessages" :key="message.id" :message="message" :streaming="session.isStreaming && message.id === session.streamMessageId" @subagent="selectedSubagent = $event" />
         <RunReviewPanel v-if="session.review && !session.isStreaming" :key="session.summary.id + session.review.startedAt" :review="session.review" />
         <div v-if="showStreamPlaceholder" class="flex items-center gap-4 py-5 text-accent-300"><Bot :size="24" :stroke-width="1.6" /><span class="text-sm text-slate-400">正在思考</span><span class="typing-dot h-1.5 w-1.5 rounded-full bg-accent-300" /></div>
       </div>
     </div>
 
-    <button v-if="session?.messages.length && !nearBottom" type="button" class="absolute bottom-44 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/10 bg-ink-800 px-3 py-1.5 text-xs text-slate-300 shadow-panel hover:bg-ink-700" @click="nearBottom = true; scrollToBottom()"><ArrowDown :size="13" /> 回到最新</button>
+    <button v-if="session?.messages.length && !nearBottom" type="button" class="absolute bottom-44 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/10 bg-ink-800 px-3 py-1.5 text-xs text-slate-300 shadow-panel hover:bg-ink-700" @click="resume"><ArrowDown :size="13" /> 回到最新</button>
 
     <div class="composer-shell shrink-0">
         <div class="composer">
@@ -165,4 +158,6 @@ onUnmounted(() => { if (scrollFrame !== undefined) cancelAnimationFrame(scrollFr
         <div class="composer-hint"><span>Enter 发送 · Shift + Enter 换行<span class="hidden sm:inline"> · Tab 切换角色</span></span></div>
     </div>
   </section>
+  <SubagentPanel v-if="selectedTool" :key="session?.summary.id" :tool="selectedTool" :agents="subagents" @close="selectedSubagent = undefined" @select="selectedSubagent = $event" />
+  </div>
 </template>

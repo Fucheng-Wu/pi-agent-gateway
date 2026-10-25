@@ -21,6 +21,7 @@ import {
 import { Type } from "typebox";
 import { createPermissionExtension, parsePermissions, type PermissionBroker, type RoleRuntime } from "./permissions.js";
 import type { PrimaryAgentRegistry } from "./primary-agents.js";
+import { trackSubagent } from "./subagent-progress.js";
 import type {
   FeatureSettings,
   McpConfigInfo,
@@ -28,6 +29,7 @@ import type {
   SkillInfo,
   SubagentProfileInfo,
   SubagentSettingsInfo,
+  SubagentRun,
 } from "../../../shared/types.js";
 
 const DEFAULT_MCP_CONFIG = "{\n  \"mcpServers\": {}\n}\n";
@@ -392,6 +394,13 @@ export class FeatureManager {
       const enabledProfiles = settings.profiles.filter((profile) => profile.enabled);
       if (!enabledProfiles.length) return;
       const profileSummary = enabledProfiles.map((profile) => `${profile.id}: ${profile.description}`).join("；");
+      const completed = new Map<string, SubagentRun>();
+      pi.on("tool_result", (event) => {
+        const run = completed.get(event.toolCallId);
+        if (!run) return;
+        completed.delete(event.toolCallId);
+        return { details: { profile: run.profile, sessionId: run.id, subagent: run }, isError: event.isError || run.status === "error" };
+      });
       pi.registerTool(defineTool({
         name: "Agent",
         label: "子代理",
@@ -403,7 +412,7 @@ export class FeatureManager {
           profile: Type.String({ description: "子代理角色 ID" }),
           task: Type.String({ minLength: 1, description: "完整、独立的任务说明" }),
         }),
-        execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+        execute: async (toolCallId, params, signal, onUpdate, ctx) => {
           const latest = await this.getSubagentSettings();
           if (!latest.enabled) throw new Error("子代理功能已关闭");
           const profile = latest.profiles.find((item) => item.id === params.profile && item.enabled);
@@ -418,6 +427,8 @@ export class FeatureManager {
           this.activeSubagents += 1;
           let childSession: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
           let abort: (() => void) | undefined;
+          let progress: ReturnType<typeof trackSubagent> | undefined;
+          let failure: string | undefined;
           try {
             const allowedSkills = new Set(profile.skills);
             const childLoader = new DefaultResourceLoader({
@@ -449,15 +460,30 @@ export class FeatureManager {
             });
             childSession = created.session;
             await childSession.bindExtensions({});
+            progress = trackSubagent(childSession, {
+              id: childSession.sessionId, profile: profile.id, name: profile.name, task: params.task,
+            }, (subagent) => onUpdate?.({ content: [], details: { subagent } }));
             abort = () => { void childSession?.abort(); };
             signal?.addEventListener("abort", abort, { once: true });
+            if (signal?.aborted) throw new Error("子代理任务已取消");
             await childSession.prompt(params.task);
+            if (signal?.aborted) throw new Error("子代理任务已取消");
+            const last = [...childSession.messages].reverse().find((message) => message.role === "assistant");
+            if (last?.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted")) {
+              throw new Error(last.errorMessage || "子代理执行中断");
+            }
             const text = textFromAssistantMessages(childSession.messages);
+            const subagent = progress.finish();
+            progress = undefined;
             return {
               content: [{ type: "text", text }],
-              details: { profile: profile.id, sessionId: childSession.sessionId },
+              details: { profile: profile.id, sessionId: childSession.sessionId, subagent },
             };
+          } catch (error) {
+            failure = error instanceof Error ? error.message : String(error);
+            throw error;
           } finally {
+            if (progress) completed.set(toolCallId, progress.finish(failure || "子代理执行中断"));
             if (abort) signal?.removeEventListener("abort", abort);
             childSession?.dispose();
             this.activeSubagents -= 1;

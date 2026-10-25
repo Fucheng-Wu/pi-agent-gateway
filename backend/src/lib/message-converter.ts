@@ -1,5 +1,5 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { ChatMessage, ContextUsage, ToolCall } from "../../../shared/types.js";
+import type { ChatMessage, ContextUsage, SubagentRun, ToolCall } from "../../../shared/types.js";
 
 type RecordLike = Record<string, unknown>;
 
@@ -30,7 +30,7 @@ function timestamp(value: unknown): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
-function toolOutput(value: unknown): string {
+export function toolOutput(value: unknown): string {
   const item = record(value);
   if (!item) return "";
   const text = contentText(item.content);
@@ -39,6 +39,12 @@ function toolOutput(value: unknown): string {
     try { return JSON.stringify(item.details, null, 2); } catch { /* ignored */ }
   }
   return "";
+}
+
+export function subagentFromResult(value: unknown): SubagentRun | undefined {
+  const run = record(record(record(value)?.details)?.subagent);
+  if (!run || typeof run.id !== "string" || typeof run.profile !== "string" || typeof run.name !== "string" || typeof run.task !== "string" || !Array.isArray(run.messages) || !["running", "done", "error"].includes(String(run.status))) return undefined;
+  return run as unknown as SubagentRun;
 }
 
 /** Builds a transcript from the current Pi branch, joining tool results to their calls. */
@@ -106,6 +112,8 @@ export function convertMessages(messages: readonly unknown[], indexOffset = 0): 
       if (call) {
         call.output = output;
         call.status = item.isError === true ? "error" : "done";
+        const subagent = subagentFromResult(item);
+        if (subagent) call.subagent = subagent;
       } else if (output) {
         assistantTurn = undefined;
         converted.push({ id, role: "tool", text: output, timestamp: at });

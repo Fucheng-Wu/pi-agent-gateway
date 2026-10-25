@@ -2,6 +2,25 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSessionPool } from '../src/stores/session-pool'
+import type { SubagentRun } from '../src/types'
+
+test('interleaved delegated conversations update independently and survive a reconnect snapshot', () => {
+  setActivePinia(createPinia())
+  const store = useSessionPool()
+  const summary = { id: 'parent', title: 'Delegate', updatedAt: new Date(1).toISOString() }
+  store.handleServerMessage({ type: 'session_state', session: { summary, messages: [], thinkingLevel: 'medium', isStreaming: true } })
+  const run = (id: string): SubagentRun => ({ id, name: id, profile: 'explore', task: id, status: 'running', messages: [{ id: 'answer', role: 'assistant', text: id }] })
+  for (const id of ['one', 'two']) store.handleServerMessage({ type: 'tool_start', sessionId: 'parent', tool: { id, name: 'Agent', status: 'running' } })
+  store.handleServerMessage({ type: 'tool_update', sessionId: 'parent', toolCallId: 'two', subagent: run('two') })
+  store.handleServerMessage({ type: 'tool_update', sessionId: 'parent', toolCallId: 'one', subagent: run('one') })
+  store.handleServerMessage({ type: 'tool_end', sessionId: 'parent', toolCallId: 'two', subagent: { ...run('two'), status: 'done' }, output: 'two complete' })
+  const tools = store.sessionStates.parent.messages[0].tools!
+  assert.equal(tools[0].subagent?.messages[0].text, 'one')
+  assert.equal(tools[0].status, 'running')
+  assert.equal(tools[1].subagent?.status, 'done')
+  store.handleServerMessage({ type: 'session_state', session: { summary, messages: JSON.parse(JSON.stringify(store.sessionStates.parent.messages)), thinkingLevel: 'medium', isStreaming: true } })
+  assert.equal(store.sessionStates.parent.messages[0].tools?.[1].subagent?.messages[0].text, 'two')
+})
 
 test('keeps a tool loop and its final answer in one assistant bubble', () => {
   setActivePinia(createPinia())

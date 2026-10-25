@@ -10,7 +10,7 @@ import { Hono } from "hono";
 import { WebSocket, WebSocketServer } from "ws";
 import { PROTOCOL_VERSION, type AgentUiEvent, type ClientMessage, type ServerMessage, type SessionSnapshot, type SessionSummary, type ThinkingLevel } from "../../shared/types.js";
 import { WsAuthInteraction } from "./lib/auth-bridge.js";
-import { attachEventRelay } from "./lib/event-relay.js";
+import { attachEventRelay, withSubagentProgress } from "./lib/event-relay.js";
 import { contextUsageFromSession, convertMessages } from "./lib/message-converter.js";
 import { ModelManager } from "./lib/model-manager.js";
 import { createSession, listStoredSessions, resumeSession, sessionDir, runSessionOperation, switchPrimaryAgent } from "./lib/session-factory.js";
@@ -125,7 +125,7 @@ function snapshot(active: ActiveSession): SessionSnapshot {
   const model = active.session.model;
   return {
     summary: active.summary,
-    messages: convertMessages(active.session.messages),
+    messages: withSubagentProgress(active, convertMessages(active.session.messages)),
     model: model ? { provider: model.provider, id: model.id } : undefined,
     thinkingLevel: active.session.thinkingLevel as ThinkingLevel,
     isStreaming: active.session.isStreaming || !!active.promptTask,

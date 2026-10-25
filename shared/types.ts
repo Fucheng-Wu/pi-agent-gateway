@@ -53,6 +53,18 @@ export interface ToolCall {
   input?: unknown;
   output?: string;
   status: "running" | "done" | "error";
+  subagent?: SubagentRun;
+}
+
+/** A delegated conversation, stored with its Agent tool result. */
+export interface SubagentRun {
+  id: string;
+  profile: string;
+  name: string;
+  task: string;
+  status: "running" | "done" | "error";
+  messages: ChatMessage[];
+  error?: string;
 }
 
 export interface ChatMessage {
@@ -204,8 +216,8 @@ export type AgentUiEvent = (
   | { type: "text_delta"; sessionId: string; delta: string }
   | { type: "thinking_delta"; sessionId: string; delta: string }
   | { type: "tool_start"; sessionId: string; tool: ToolCall }
-  | { type: "tool_update"; sessionId: string; toolCallId: string; output?: string }
-  | { type: "tool_end"; sessionId: string; toolCallId: string; output?: string; isError?: boolean }
+  | { type: "tool_update"; sessionId: string; toolCallId: string; output?: string; subagent?: SubagentRun }
+  | { type: "tool_end"; sessionId: string; toolCallId: string; output?: string; isError?: boolean; subagent?: SubagentRun }
   | { type: "message_end"; sessionId: string; message: ChatMessage }
   | { type: "agent_end"; sessionId: string; contextUsage?: ContextUsage; error?: string }
   | { type: "run_review"; sessionId: string; review: RunReview }

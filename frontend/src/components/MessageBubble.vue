@@ -4,9 +4,10 @@ import { markdown } from '@/lib/markdown'
 import { Bot, Check, Copy } from 'lucide-vue-next'
 import type { ChatMessage } from '@/types'
 import ThinkingPanel from './ThinkingPanel.vue'
-import ToolCard from './ToolCard.vue'
+import ToolExecutionPanel from './ToolExecutionPanel.vue'
 
 const props = defineProps<{ message: ChatMessage; streaming?: boolean }>()
+const emit = defineEmits<{ subagent: [toolId: string] }>()
 const rendered = ref('')
 let renderTimer: ReturnType<typeof setTimeout> | undefined
 function render() {
@@ -41,7 +42,7 @@ async function copyText() {
       </div>
       <div>
         <ThinkingPanel v-if="message.thinking" :text="message.thinking" :streaming="streaming && !message.text" />
-        <ToolCard v-for="tool in message.tools" :key="tool.id" :tool="tool" />
+        <ToolExecutionPanel v-if="message.tools?.length" :tools="message.tools" :streaming="streaming && !message.text" @subagent="emit('subagent', $event)" />
         <div v-if="message.text" class="markdown" v-html="rendered" />
         <div v-else-if="streaming && !message.thinking && !message.tools?.length" class="flex h-5 items-center gap-1.5" aria-label="正在回复">
           <span v-for="i in 3" :key="i" class="typing-dot h-1.5 w-1.5 rounded-full bg-accent-300" :style="{ animationDelay: `${i * 0.16}s` }" />

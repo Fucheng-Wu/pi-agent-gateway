@@ -14,6 +14,7 @@ export type {
   SkillInfo,
   SubagentProfileInfo,
   SubagentSettingsInfo,
+  SubagentRun,
   ThinkingLevel,
   ToolCall
 } from '../../shared/types'

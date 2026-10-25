@@ -137,6 +137,14 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     await client.wait((item) => item.type === "agent_end", from);
     assert.equal(client.messages.slice(from).filter((item) => item.type === "permission_request").length, 0);
     assert.equal(await readFile(join(root, "child.txt"), "utf8"), "approved");
+    const childUpdates = client.messages.slice(from).filter((item) => item.type === "tool_update" && item.subagent);
+    assert.ok(childUpdates.some((item) => item.type === "tool_update" && item.subagent?.status === "running"), "child starts streaming before completion");
+    const childEnd = client.messages.slice(from).find((item) => item.type === "tool_end" && item.subagent);
+    assert.ok(childEnd?.type === "tool_end" && childEnd.subagent?.status === "done");
+    assert.ok(childEnd.subagent.messages.some((message) => message.tools?.some((tool) => tool.name === "write" && tool.status === "done")), "child tools are visible in the transcript");
+    assert.ok(childEnd.subagent.messages.some((message) => message.text === "Finished."));
+    const childSnapshot = await client.request({ type: "load_session", sessionId }, "session_state");
+    assert.ok(childSnapshot.type === "session_state" && childSnapshot.session.messages.some((message) => message.tools?.some((tool) => tool.subagent?.id === childEnd.subagent?.id)), "reconnect snapshots keep the child transcript");
     await rm(join(root, "child.txt"));
 
     await client.request({ type: "set_primary_agent", sessionId, agentId: "confirm" }, "session_state");
@@ -160,9 +168,22 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     const delegated = await client.wait((item) => item.type === "permission_request", from);
     assert.ok(delegated.type === "permission_request" && delegated.permission.agentId.includes("general-purpose"));
     if (delegated.type !== "permission_request") throw new Error("No child approval");
+    const liveChild = await client.request({ type: "load_session", sessionId }, "session_state");
+    assert.ok(liveChild.type === "session_state" && liveChild.session.messages.at(-1)?.tools?.some((tool) => tool.subagent?.status === "running"), "a snapshot during child execution retains progress");
     client.send({ type: "permission_response", permissionId: delegated.permission.id, decision: "deny" });
     await client.wait((item) => item.type === "agent_end", from);
     await assert.rejects(access(join(root, "child.txt")));
+
+    from = client.messages.length;
+    client.send({ type: "prompt", sessionId, text: "delegate-write" });
+    await client.wait((item) => item.type === "permission_request", from);
+    client.send({ type: "abort", sessionId });
+    await client.wait((item) => item.type === "agent_end", from);
+    const cancelledChild = await client.request({ type: "load_session", sessionId }, "session_state");
+    assert.ok(cancelledChild.type === "session_state");
+    const cancelledRun = cancelledChild.session.messages.at(-1)?.tools?.find((tool) => tool.name === "Agent")?.subagent;
+    assert.equal(cancelledRun?.status, "error", "cancelling the parent settles the delegated conversation");
+    assert.ok(cancelledRun.error);
 
     from = client.messages.length;
     client.send({ type: "prompt", sessionId, text: "cancel-write" });
@@ -183,6 +204,7 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     assert.equal(returned.type, "ack");
     const resumed = await client.request({ type: "load_session", sessionId }, "session_state");
     assert.ok(resumed.type === "session_state" && resumed.session.messages.length && resumed.session.review?.finishedAt);
+    assert.ok(resumed.session.messages.some((message) => message.tools?.some((tool) => tool.subagent?.status === "done")), "persisted parent history restores delegated conversations");
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.stack : error}\nBackend logs:\n${logs}`);
   } finally {

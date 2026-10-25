@@ -1,5 +1,5 @@
 import type { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
-import type { ContextUsage, SessionSummary, RunReview } from "../../../shared/types.js";
+import type { ContextUsage, SessionSummary, RunReview, ToolCall } from "../../../shared/types.js";
 import type { RoleRuntime } from "./permissions.js";
 
 export interface ActiveSession {
@@ -17,4 +17,5 @@ export interface ActiveSession {
   epoch?: string;
   sequence?: number;
   review?: RunReview;
+  subagentTools?: Map<string, ToolCall>;
 }

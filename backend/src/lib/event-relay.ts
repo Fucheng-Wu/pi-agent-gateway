@@ -1,9 +1,22 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentUiEvent, ChatMessage } from "../../../shared/types.js";
-import { contextUsageFromSession, convertMessages, titleFromMessages } from "./message-converter.js";
+import { contextUsageFromSession, convertMessages, subagentFromResult, titleFromMessages } from "./message-converter.js";
 import type { ActiveSession } from "./types.js";
 
 type SendEvent = (event: AgentUiEvent) => void;
+
+/** Retain live child progress across parent message replacement and reconnects. */
+export function withSubagentProgress(active: ActiveSession, messages: ChatMessage[]): ChatMessage[] {
+  for (const tool of active.subagentTools?.values() ?? []) {
+    const existing = messages.flatMap((message) => message.tools ?? []).find((item) => item.id === tool.id);
+    if (existing) Object.assign(existing, tool);
+    else {
+      const assistant = [...messages].reverse().find((message) => message.role === "assistant");
+      if (assistant) (assistant.tools ??= []).push({ ...tool });
+    }
+  }
+  return messages;
+}
 
 function resultText(value: unknown): string {
   if (typeof value === "string") return value;
@@ -29,7 +42,7 @@ function finishedMessage(active: ActiveSession, raw: unknown): ChatMessage | und
   let start = index;
   while (start > 0 && active.session.messages[start].role !== "user") start--;
   // Only rebuild this turn, while preserving IDs based on positions in the full branch.
-  return convertMessages(active.session.messages.slice(start, index + 1), start).at(-1);
+  return withSubagentProgress(active, convertMessages(active.session.messages.slice(start, index + 1), start)).at(-1);
 }
 
 export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSnapshot?: () => void): void {
@@ -37,6 +50,7 @@ export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSna
     try {
       switch (event.type) {
         case "agent_start":
+          active.subagentTools = new Map();
           send({ type: "agent_start", sessionId: active.id });
           break;
         case "message_update":
@@ -47,6 +61,9 @@ export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSna
           }
           break;
         case "tool_execution_start":
+          if (event.toolName === "Agent") {
+            (active.subagentTools ??= new Map()).set(event.toolCallId, { id: event.toolCallId, name: event.toolName, input: event.args, status: "running" });
+          }
           if (active.review && event.toolName === "bash" && typeof event.args.command === "string" && active.review.commands.length < 100) {
             active.review.commands.push({ id: event.toolCallId, command: event.args.command.slice(0, 4000), status: "running" });
           }
@@ -61,15 +78,27 @@ export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSna
             },
           });
           break;
-        case "tool_execution_update":
+        case "tool_execution_update": {
+          const subagent = subagentFromResult(event.partialResult);
+          const tool = active.subagentTools?.get(event.toolCallId);
+          if (tool && subagent) tool.subagent = subagent;
           send({
             type: "tool_update",
             sessionId: active.id,
             toolCallId: event.toolCallId,
-            output: resultText(event.partialResult),
+            output: subagent ? undefined : resultText(event.partialResult),
+            ...(subagent ? { subagent } : {}),
           });
           break;
-        case "tool_execution_end":
+        }
+        case "tool_execution_end": {
+          const subagent = subagentFromResult(event.result);
+          const tool = active.subagentTools?.get(event.toolCallId);
+          if (tool) {
+            tool.output = resultText(event.result);
+            tool.status = event.isError ? "error" : "done";
+            if (subagent) tool.subagent = subagent;
+          }
           const command = active.review?.commands.find((item) => item.id === event.toolCallId);
           if (command) { command.status = event.isError ? "error" : "done"; command.output = resultText(event.result).slice(-4000); }
           send({
@@ -78,8 +107,10 @@ export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSna
             toolCallId: event.toolCallId,
             output: resultText(event.result),
             isError: event.isError,
+            ...(tool?.subagent ? { subagent: tool.subagent } : {}),
           });
           break;
+        }
         case "message_end": {
           const message = finishedMessage(active, event.message);
           if (!message) break;

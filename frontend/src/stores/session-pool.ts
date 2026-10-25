@@ -362,6 +362,7 @@ export const useSessionPool = defineStore('session-pool', () => {
         const tool = message?.tools?.find((item) => item.id === event.toolCallId)
         if (tool) {
           if (event.output !== undefined) tool.output = event.output
+          if (event.subagent) tool.subagent = event.subagent
           if (event.type === 'tool_end') tool.status = event.isError ? 'error' : 'done'
         }
         break
