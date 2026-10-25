@@ -18,6 +18,8 @@ import { SessionPool } from "./lib/session-pool.js";
 import { createSharedResources } from "./lib/shared-resources.js";
 import type { ActiveSession } from "./lib/types.js";
 import { validateClientMessage } from "../../shared/validation.js";
+import { MAX_MESSAGE_BYTES } from "../../shared/images.js";
+import type { ImageAttachment } from "../../shared/types.js";
 import { WorkspaceManager } from "./lib/workspace-manager.js";
 import { captureWorkspace, compareWorkspace, saveRunReview, deleteRunReview } from "./lib/run-review.js";
 
@@ -48,7 +50,7 @@ function send(ws: WebSocket, message: ServerMessage): void {
 
 function sendEncoded(ws: WebSocket, encoded: string): void {
   if (ws.readyState !== WebSocket.OPEN) return;
-  if (ws.bufferedAmount > 8 * 1024 * 1024) { ws.close(1013, "Client too slow; reconnect and reload snapshots"); return; }
+  if (ws.bufferedAmount > 2 * MAX_MESSAGE_BYTES) { ws.close(1013, "Client too slow; reconnect and reload snapshots"); return; }
   ws.send(encoded);
 }
 
@@ -186,8 +188,9 @@ function lastPromptError(active: ActiveSession): string | undefined {
     : undefined;
 }
 
-function startPrompt(ws: WebSocket, active: ActiveSession, text: string, requestId?: string): void {
+function startPrompt(ws: WebSocket, active: ActiveSession, text: string, requestId?: string, images?: ImageAttachment[]): void {
   if (active.promptTask || active.operationTask || !active.session.isIdle) throw new Error("此会话正在工作，请等待或先取消");
+  if (images?.length && !active.session.model?.input.includes("image")) throw new Error("当前模型不支持图片，请切换到支持图像输入的模型");
   active.role.controller = new AbortController();
   resources.permissions.setOwner(active.id, clientIds.get(ws)!);
   active.review = { startedAt: new Date().toISOString(), workspace: resources.cwd, files: [], commands: [] };
@@ -195,7 +198,7 @@ function startPrompt(ws: WebSocket, active: ActiveSession, text: string, request
     const before = await captureWorkspace(resources.cwd);
     try {
       if (active.role.controller.signal.aborted) throw new Error("任务已取消");
-      await active.session.prompt(text);
+      await active.session.prompt(text, { images: images?.map(({ data, mimeType }) => ({ type: "image" as const, data, mimeType })) });
     }
     finally {
       const review = active.review!;
@@ -339,7 +342,7 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
       return;
     case "prompt": {
       const active = await getSession(requireText(message.sessionId, "sessionId", 128));
-      startPrompt(ws, active, requireText(message.text, "text"), requestId);
+      startPrompt(ws, active, message.text, requestId, message.images);
       return;
     }
     case "abort": {
@@ -488,7 +491,7 @@ if (existsSync(resolve(webRoot, "index.html"))) app.get("/*", serveStatic({ root
 else app.get("/", (context) => context.text("Pi Agent Gateway is running. Run pnpm build to serve the web console."));
 
 const server = serve({ fetch: app.fetch, hostname: host, port });
-const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
+const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
 
 function acceptedOrigin(origin: string | undefined): boolean {
   if (!origin) return true; // CLI clients have no browser Origin.

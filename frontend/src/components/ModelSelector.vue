@@ -18,7 +18,7 @@ const options = computed(() => {
     label: model.name || model.id,
     description: model.name && model.name !== model.id ? model.id : model.contextWindow ? `${model.contextWindow.toLocaleString()} context` : '可用模型',
     group: model.provider,
-    badge: model.reasoning ? '推理' : undefined,
+    badge: [model.supportsImages ? '图像' : '', model.reasoning ? '推理' : ''].filter(Boolean).join(' · ') || undefined,
   }))
   if (props.selected && !props.models.some((model) => model.provider === props.selected?.provider && model.id === props.selected?.id)) {
     values.unshift({ value: selectedValue.value, label: props.selected.id, description: '当前会话模型', group: props.selected.provider, badge: undefined })

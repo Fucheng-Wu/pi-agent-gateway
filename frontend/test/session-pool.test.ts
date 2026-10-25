@@ -154,6 +154,27 @@ test('a rejected prompt removes only its optimistic message and restores an acti
   store.onTransportDisconnected()
 })
 
+test('image-only prompts keep attachments through optimistic messages, rejection and snapshots', () => {
+  const { store, sent, snapshot } = recoveryStore()
+  const images = [{ mimeType: 'image/png' as const, data: 'aGVsbG8=', name: 'example.png' }]
+  assert.equal(store.prompt('recovery', '', images), true)
+  assert.deepEqual(sent[0].images, images)
+  assert.deepEqual(store.sessionStates.recovery.messages[0].images, images)
+  store.handleServerMessage({ type: 'error', requestId: sent[0].requestId, sessionId: 'recovery', message: 'Model does not support images' })
+  assert.deepEqual(store.recoveredImages.recovery, images)
+  assert.equal(store.recoveredDrafts.recovery, '')
+  assert.equal(store.sessionStates.recovery.messages.length, 0)
+  store.handleServerMessage({ type: 'session_state', requestId: sent.at(-1).requestId, session: snapshot() })
+  assert.equal(store.prompt('recovery', 'Describe', images), true)
+  const incoming = { id: 'persisted', role: 'user' as const, text: 'Describe\n[Image: resized]', images: [{ ...images[0], data: 'cmVzaXplZA==' }] }
+  store.handleServerMessage({ type: 'message_end', sessionId: 'recovery', message: incoming })
+  assert.equal(store.sessionStates.recovery.messages.length, 1)
+  assert.equal(store.sessionStates.recovery.messages[0].id, 'persisted')
+  store.handleServerMessage({ type: 'session_state', session: { ...snapshot(), messages: [incoming] } })
+  assert.deepEqual(store.sessionStates.recovery.messages[0].images, incoming.images)
+  store.onTransportDisconnected()
+})
+
 test('authoritative snapshots fill missing text and replay only events after their sequence', () => {
   const { store, sent, snapshot } = recoveryStore()
   store.handleServerMessage({ type: 'session_state', session: snapshot('A', 1, true) })

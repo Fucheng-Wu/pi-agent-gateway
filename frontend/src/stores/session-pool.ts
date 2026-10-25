@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type {
-  AgentUiEvent, ChatMessage, ClientMessage, FeatureSettings, ModelInfo, ProviderInfo, ServerMessage,
+  AgentUiEvent, ChatMessage, ImageAttachment, ClientMessage, FeatureSettings, ModelInfo, ProviderInfo, ServerMessage,
   SessionSnapshot, SessionSummary, SessionUiState, SubagentProfileInfo, ThinkingLevel, ToolCall, WorkspaceInfo, DirectoryListing
 } from '@/types'
 import type { PrimaryAgentInfo, PermissionRequest, PermissionDecision } from '@/types'
@@ -64,6 +64,7 @@ export const useSessionPool = defineStore('session-pool', () => {
   const pendingRequests = new Map<string, { message: ClientMessage; timer: ReturnType<typeof setTimeout> }>()
   const promptRequests = new Map<string, { requestId: string; optimisticId: string }>()
   const recoveredDrafts = ref<Record<string, string>>({})
+  const recoveredImages = ref<Record<string, ImageAttachment[]>>({})
   const workspace = ref<WorkspaceInfo | null>(null)
   const workspaceChanging = ref(false)
   const directoryListing = ref<DirectoryListing | null>(null)
@@ -109,7 +110,10 @@ export const useSessionPool = defineStore('session-pool', () => {
       const state = sessionStates.value[key]
       if (state) {
         const optimistic = state.messages.find((message) => message.id === value.optimisticId)
-        if (optimistic) recoveredDrafts.value[key] = optimistic.text
+        if (optimistic) {
+          recoveredDrafts.value[key] = optimistic.text
+          recoveredImages.value[key] = optimistic.images ?? []
+        }
         state.messages = state.messages.filter((message) => message.id !== value.optimisticId)
         state.isStreaming = false
         state.streamMessageId = undefined
@@ -211,17 +215,18 @@ export const useSessionPool = defineStore('session-pool', () => {
     loadSession(sessionId)
   }
   function deleteSession(sessionId: string) { return dispatch({ type: 'delete_session', sessionId }) }
-  function prompt(sessionId: string, text: string) {
+  function prompt(sessionId: string, text: string, images?: ImageAttachment[]) {
     if (loadingSessions.has(sessionId)) { tell('正在同步对话，请稍后发送'); return false }
     const trimmed = text.trim()
-    if (!trimmed) return false
+    if (!trimmed && !images?.length) return false
     const requestId = id('prompt')
     const optimisticId = `optimistic-${requestId}`
-    if (!dispatch({ type: 'prompt', sessionId, text: trimmed, requestId })) return false
+    const attachments = images?.length ? images.map((image) => ({ ...image })) : undefined
+    if (!dispatch({ type: 'prompt', sessionId, text: trimmed, ...(attachments ? { images: attachments } : {}), requestId })) return false
     promptRequests.set(sessionId, { requestId, optimisticId })
     const state = sessionStates.value[sessionId]
     if (state) {
-      state.messages.push({ id: optimisticId, role: 'user', text: trimmed, timestamp: new Date().toISOString() })
+      state.messages.push({ id: optimisticId, role: 'user', text: trimmed, ...(attachments ? { images: attachments } : {}), timestamp: new Date().toISOString() })
       state.isStreaming = true
       state.summary.title = state.summary.title || trimmed.slice(0, 48)
       state.revision++
@@ -370,7 +375,9 @@ export const useSessionPool = defineStore('session-pool', () => {
       case 'message_end': {
         const incoming = event.message
         if (incoming.role === 'user') {
-          const index = state.messages.findLastIndex((m) => m.id.startsWith('optimistic-') && m.text === incoming.text)
+          const optimisticId = promptRequests.get(state.summary.id)?.optimisticId
+          // Pi may resize images and append dimension hints to the submitted text.
+          const index = state.messages.findLastIndex((m) => m.id === optimisticId && (m.text === incoming.text || (m.images?.length && incoming.images?.length && incoming.text.startsWith(m.text))))
           if (index >= 0) { state.messages[index] = incoming; promptRequests.delete(state.summary.id); break }
         }
         if (incoming.role === 'assistant' && state.streamMessageId) {
@@ -502,6 +509,7 @@ export const useSessionPool = defineStore('session-pool', () => {
         for (const [requestId, pending] of pendingRequests) if ('sessionId' in pending.message && pending.message.sessionId === message.sessionId) settleRequest(requestId)
         promptRequests.delete(message.sessionId)
         delete recoveredDrafts.value[message.sessionId]
+        delete recoveredImages.value[message.sessionId]
         delete primaryAgentChanging.value[message.sessionId]
         permissionRequests.value = permissionRequests.value.filter((item) => item.sessionId !== message.sessionId)
         if (activeSessionId.value === message.sessionId) {
@@ -585,6 +593,7 @@ export const useSessionPool = defineStore('session-pool', () => {
           onTransportDisconnected()
           promptRequests.clear()
           recoveredDrafts.value = {}
+          recoveredImages.value = {}
           sessionStates.value = {}
           sessions.value = []
           activeSessionId.value = null
@@ -607,7 +616,7 @@ export const useSessionPool = defineStore('session-pool', () => {
   }
 
   return {
-    workspace, workspaceChanging, directoryListing, directoriesLoading, browseDirectories, setWorkspace, recoveredDrafts, sessionLoading,
+    workspace, workspaceChanging, directoryListing, directoriesLoading, browseDirectories, setWorkspace, recoveredDrafts, recoveredImages, sessionLoading,
     sessions, sortedSessions, sessionStates, activeSessionId, activeSession, models, providers,
     primaryAgents, primaryAgentChanging, permissionRequests, permissionResponding, setPrimaryAgent, respondPermission,
     modelsConfig, configLoaded, configSaving, modelDiscovery, modelTest, authChallenge, authStatus,

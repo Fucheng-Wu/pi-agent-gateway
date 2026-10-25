@@ -1,6 +1,7 @@
 export type {
   AgentUiEvent,
   ChatMessage,
+  ImageAttachment,
   ClientMessage,
   ContextUsage,
   FeatureSettings,

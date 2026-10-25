@@ -47,7 +47,10 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
   await mkdir(agentDir);
   await mkdir(join(agentDir, "primary-agents"));
   await writeFile(join(agentDir, "primary-agents/confirm.md"), '---\nname: confirm\ntools: ["*"]\npermissions: [{"action":"*","resource":"*","effect":"ask"},{"action":"Agent","resource":"*","effect":"allow"}]\n---\nAsk before modifying files.');
+  let receivedImageContent: unknown;
+  let modelCalls = 0;
   const modelServer = createServer(async (request, response) => {
+    modelCalls++;
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString());
@@ -55,6 +58,8 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     const lastUser = [...messages].reverse().find((item) => item.role === "user");
     const text = typeof lastUser?.content === "string" ? lastUser.content : JSON.stringify(lastUser?.content);
     const afterTool = messages.at(-1)?.role === "tool";
+    const imageQuestion = Array.isArray(lastUser?.content) && lastUser.content.some((part) => part.type === "image_url");
+    if (imageQuestion) receivedImageContent = lastUser?.content;
     let name = "write";
     let args: Record<string, unknown> = { path: "approved.txt", content: "approved" };
     if (text.includes("plan-write")) args.path = "blocked.txt";
@@ -63,16 +68,16 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     if (text.includes("confirm-write")) args.path = "confirmed.txt";
     if (text.includes("delegate-write")) { name = "Agent"; args = { profile: "general-purpose", task: "child-write" }; }
     response.writeHead(200, { "content-type": "text/event-stream" });
-    const delta = afterTool ? { content: "Finished." } : { tool_calls: [{ index: 0, id: `call_${crypto.randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] };
+    const delta = imageQuestion ? { content: "A small image." } : afterTool ? { content: "Finished." } : { tool_calls: [{ index: 0, id: `call_${crypto.randomUUID()}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] };
     response.write(`data: ${JSON.stringify({ id: "reply", object: "chat.completion.chunk", created: 1, model: "test", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
-    response.write(`data: ${JSON.stringify({ id: "reply", object: "chat.completion.chunk", created: 1, model: "test", choices: [{ index: 0, delta: {}, finish_reason: afterTool ? "stop" : "tool_calls" }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "reply", object: "chat.completion.chunk", created: 1, model: "test", choices: [{ index: 0, delta: {}, finish_reason: afterTool || imageQuestion ? "stop" : "tool_calls" }] })}\n\n`);
     response.end("data: [DONE]\n\n");
   });
   const modelPort = await listen(modelServer);
   const reservation = createServer();
   const port = await listen(reservation);
   await new Promise<void>((resolvePromise) => reservation.close(() => resolvePromise()));
-  await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { "gateway-test": { baseUrl: `http://127.0.0.1:${modelPort}/v1`, api: "openai-completions", apiKey: "test-only", models: [{ id: "test", contextWindow: 32000, maxTokens: 1024 }] } } }));
+  await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { "gateway-test": { baseUrl: `http://127.0.0.1:${modelPort}/v1`, api: "openai-completions", apiKey: "test-only", models: [{ id: "test", input: ["text", "image"], contextWindow: 32000, maxTokens: 1024 }, { id: "text-only", input: ["text"], contextWindow: 32000, maxTokens: 1024 }] } } }));
   const backend = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
     cwd: resolve(import.meta.dirname, ".."),
     env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", PI_AGENT_DIR: agentDir, PI_WORKSPACE_DIR: root },
@@ -103,6 +108,7 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     const init = client.messages.find((item) => item.type === "init");
     assert.ok(init?.type === "init" && init.primaryAgents?.some((item) => item.id === "plan"));
     assert.ok(init?.type === "init" && init.workspace?.path === root);
+    assert.ok(init.models.some((model) => model.id === "test" && model.supportsImages));
     client.socket.send(JSON.stringify({ type: "set_model", sessionId: 42, requestId: "invalid-command" }));
     const invalid = await client.wait((item) => item.type === "error" && item.requestId === "invalid-command");
     assert.ok(invalid.type === "error" && invalid.code === "BAD_REQUEST");
@@ -110,8 +116,21 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     assert.equal(created.type, "session_created");
     if (created.type !== "session_created") throw new Error("No session");
     const sessionId = created.session.summary.id;
+    const image = { mimeType: "image/png" as const, data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAQSURBVBhXY/jPwPCfARkAAB7zAf+x9MCaAAAAAElFTkSuQmCC" };
+    await client.request({ type: "set_model", sessionId, provider: "gateway-test", modelId: "text-only" }, "ack");
+    const callsBefore = modelCalls;
+    await assert.rejects(client.request({ type: "prompt", sessionId, text: "", images: [image] }, "ack"), /不支持图片/);
+    assert.equal(modelCalls, callsBefore, "unsupported images are rejected before calling the provider");
     client.send({ type: "set_model", sessionId, provider: "gateway-test", modelId: "test" });
-    await client.wait((item) => item.type === "session_updated" && item.model?.provider === "gateway-test");
+    await client.wait((item) => item.type === "session_updated" && item.model?.id === "test");
+    const imageFrom = client.messages.length;
+    client.send({ type: "prompt", sessionId, text: "", images: [image] });
+    await client.wait((item) => item.type === "agent_end", imageFrom);
+    assert.ok(Array.isArray(receivedImageContent) && receivedImageContent.some((part) => part.type === "image_url" && part.image_url.url === `data:image/png;base64,${image.data}`), `image bytes reach the actual SDK provider request: ${JSON.stringify({ receivedImageContent, events: client.messages.slice(imageFrom) })}`);
+    const imageSnapshot = await client.request({ type: "load_session", sessionId }, "session_state");
+    assert.ok(imageSnapshot.type === "session_state");
+    assert.deepEqual(imageSnapshot.session.messages.find((message) => message.role === "user")?.images, [image]);
+    assert.ok(imageSnapshot.session.messages.some((message) => message.text === "A small image."));
     const plan = await client.request({ type: "set_primary_agent", sessionId, agentId: "plan" }, "session_state");
     assert.ok(plan.type === "session_state" && plan.session.primaryAgentId === "plan" && plan.session.model?.provider === "gateway-test");
     let from = client.messages.length;
@@ -204,6 +223,7 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     assert.equal(returned.type, "ack");
     const resumed = await client.request({ type: "load_session", sessionId }, "session_state");
     assert.ok(resumed.type === "session_state" && resumed.session.messages.length && resumed.session.review?.finishedAt);
+    assert.deepEqual(resumed.session.messages.find((message) => message.images?.length)?.images, [image], "image bytes restore from saved Pi history after session disposal");
     assert.ok(resumed.session.messages.some((message) => message.tools?.some((tool) => tool.subagent?.status === "done")), "persisted parent history restores delegated conversations");
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.stack : error}\nBackend logs:\n${logs}`);

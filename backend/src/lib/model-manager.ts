@@ -103,6 +103,7 @@ export class ModelManager {
       name: model.name || model.id,
       contextWindow: model.contextWindow,
       reasoning: model.reasoning,
+      supportsImages: model.input.includes("image"),
     }));
   }
 

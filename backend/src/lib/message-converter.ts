@@ -1,5 +1,6 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ChatMessage, ContextUsage, SubagentRun, ToolCall } from "../../../shared/types.js";
+import { isImageAttachment } from "../../../shared/images.js";
 
 type RecordLike = Record<string, unknown>;
 
@@ -62,7 +63,10 @@ export function convertMessages(messages: readonly unknown[], indexOffset = 0): 
 
     if (item.role === "user") {
       assistantTurn = undefined;
-      converted.push({ id, role: "user", text: contentText(item.content), timestamp: at });
+      const images = Array.isArray(item.content) ? item.content
+        .filter((block) => record(block)?.type === "image" && isImageAttachment(block))
+        .map((block) => ({ data: block.data, mimeType: block.mimeType })) : [];
+      converted.push({ id, role: "user", text: contentText(item.content), timestamp: at, ...(images.length ? { images } : {}) });
       return;
     }
 
@@ -125,8 +129,8 @@ export function convertMessages(messages: readonly unknown[], indexOffset = 0): 
 }
 
 export function titleFromMessages(messages: readonly ChatMessage[]): string {
-  const first = messages.find((message) => message.role === "user" && message.text.trim());
-  return first ? first.text.replace(/\s+/g, " ").trim().slice(0, 64) : "新对话";
+  const first = messages.find((message) => message.role === "user" && (message.text.trim() || message.images?.length));
+  return first ? first.text.replace(/\s+/g, " ").trim().slice(0, 64) || "图片问答" : "新对话";
 }
 
 export function contextUsageFromSession(session: AgentSession): ContextUsage | undefined {

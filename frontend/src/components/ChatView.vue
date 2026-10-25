@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { ArrowDown, ArrowUp, Bot, Menu, Moon, Plus, Square, Sun } from 'lucide-vue-next'
+import { ArrowDown, ArrowUp, Bot, ImagePlus, Menu, Moon, Plus, Square, Sun, X } from 'lucide-vue-next'
 import { useSessionPool } from '@/stores/session-pool'
 import { useTheme } from '@/composables/useTheme'
 import { useChatScroll } from '@/composables/useChatScroll'
-import type { ConnectionState, SessionUiState, ThinkingLevel } from '@/types'
+import type { ConnectionState, ImageAttachment, SessionUiState, ThinkingLevel } from '@/types'
+import { imageSource, IMAGE_MIME_TYPES, MAX_IMAGES } from '../../../shared/images'
+import { readImage } from '@/lib/images'
 import ContextUsageIndicator from './ContextUsageIndicator.vue'
 import MessageBubble from './MessageBubble.vue'
 import ModelSelector from './ModelSelector.vue'
@@ -19,6 +21,12 @@ const store = useSessionPool()
 const { theme, toggleTheme } = useTheme()
 const draft = ref('')
 const drafts = new Map<string, string>()
+const images = ref<ImageAttachment[]>([])
+const imageDrafts = new Map<string, ImageAttachment[]>()
+const imageInput = ref<HTMLInputElement | null>(null)
+const imageError = ref('')
+const reading = ref<Record<string, boolean>>({})
+const readingImages = computed(() => !!props.session && !!reading.value[props.session.summary.id])
 const visibleCount = ref(60)
 const visibleMessages = computed(() => props.session?.messages.slice(-visibleCount.value) ?? [])
 const hiddenCount = computed(() => Math.max(0, (props.session?.messages.length ?? 0) - visibleCount.value))
@@ -32,17 +40,48 @@ const suggestions = ['帮我梳理这个项目的架构', '解释一段代码的
 
 const changingPrimary = computed(() => !!props.session && !!store.primaryAgentChanging[props.session.summary.id])
 const syncing = computed(() => !!props.session && !!store.sessionLoading[props.session.summary.id])
-const canSend = computed(() => !!props.session && props.connection === 'connected' && !props.session.isStreaming && !changingPrimary.value && !syncing.value && !!draft.value.trim())
+const canAttach = computed(() => !!props.session && props.connection === 'connected' && !props.session.isStreaming && !changingPrimary.value && !syncing.value && !readingImages.value)
+const selectedModel = computed(() => store.models.find(model => model.provider === props.session?.model?.provider && model.id === props.session?.model?.id))
+const imageModelError = computed(() => images.value.length && selectedModel.value?.supportsImages === false ? '当前模型不支持图片，请切换到支持图像输入的模型' : '')
+const canSend = computed(() => canAttach.value && !imageModelError.value && (!!draft.value.trim() || images.value.length > 0))
 const currentTitle = computed(() => props.session?.summary.title || '新对话')
 const showStreamPlaceholder = computed(() => props.session?.isStreaming && !props.session.messages.some((m) => m.id === props.session?.streamMessageId && m.role === 'assistant'))
 
 function send() {
   if (!canSend.value || !props.session) return
-  if (store.prompt(props.session.summary.id, draft.value)) {
+  if (store.prompt(props.session.summary.id, draft.value, images.value)) {
     draft.value = ''
+    images.value = []
+    imageError.value = ''
     resizeTextarea()
     resume()
   }
+}
+async function addImages(files: File[]) {
+  if (!canAttach.value || !props.session || !files.length) return
+  imageError.value = ''
+  if (images.value.length + files.length > MAX_IMAGES) { imageError.value = `每条消息最多上传 ${MAX_IMAGES} 张图片`; return }
+  const sessionId = props.session.summary.id
+  const target = images.value
+  reading.value[sessionId] = true
+  try {
+    const added = await Promise.all(files.map(readImage))
+    target.push(...added)
+  } catch (error) {
+    if (props.session?.summary.id === sessionId) imageError.value = error instanceof Error ? error.message : '图片读取失败'
+  } finally { delete reading.value[sessionId] }
+}
+function onFiles(event: Event) {
+  const input = event.target as HTMLInputElement
+  void addImages(Array.from(input.files ?? []))
+  input.value = ''
+}
+function onPaste(event: ClipboardEvent) {
+  const files = Array.from(event.clipboardData?.files ?? []).filter(file => file.type.startsWith('image/'))
+  if (files.length) { event.preventDefault(); void addImages(files) }
+}
+function onDrop(event: DragEvent) {
+  void addImages(Array.from(event.dataTransfer?.files ?? []))
 }
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey && props.session && !props.session.isStreaming && !changingPrimary.value && props.connection === 'connected' && store.primaryAgents.length) {
@@ -86,16 +125,22 @@ function setThinking(level: ThinkingLevel) {
 
 watch(() => props.session?.summary.id, (next, previous) => {
   if (previous) drafts.set(previous, draft.value)
+  if (previous) imageDrafts.set(previous, images.value)
   draft.value = next ? drafts.get(next) ?? '' : ''
+  images.value = next ? imageDrafts.get(next) ?? [] : []
+  imageError.value = ''
   visibleCount.value = 60
   selectedSubagent.value = undefined
   resizeTextarea()
   resume()
 })
-watch(() => props.session ? store.recoveredDrafts[props.session.summary.id] : undefined, (text) => {
-  if (text && !draft.value && props.session) {
-    draft.value = text
+watch([() => props.session ? store.recoveredDrafts[props.session.summary.id] : undefined,
+  () => props.session ? store.recoveredImages[props.session.summary.id] : undefined], ([text, attachments]) => {
+  if ((text || attachments?.length) && !draft.value && !images.value.length && props.session) {
+    draft.value = text ?? ''
+    images.value = attachments ?? []
     delete store.recoveredDrafts[props.session.summary.id]
+    delete store.recoveredImages[props.session.summary.id]
     resizeTextarea()
   }
 })
@@ -142,20 +187,32 @@ watch(() => props.session?.isStreaming, () => { if (nearBottom.value) scrollToBo
     <button v-if="session?.messages.length && !nearBottom" type="button" class="absolute bottom-44 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/10 bg-ink-800 px-3 py-1.5 text-xs text-slate-300 shadow-panel hover:bg-ink-700" @click="resume"><ArrowDown :size="13" /> 回到最新</button>
 
     <div class="composer-shell shrink-0">
-        <div class="composer">
+        <input ref="imageInput" type="file" class="hidden" :accept="IMAGE_MIME_TYPES.join(',')" multiple aria-label="选择图片" :disabled="!canAttach" @change="onFiles" />
+        <div v-if="images.length || imageError || imageModelError || readingImages" class="composer-attachments">
+          <div v-if="images.length" class="composer-images">
+            <div v-for="(image, index) in images" :key="index" class="composer-image">
+              <img :src="imageSource(image)" :alt="image.name || `图片 ${index + 1}`" />
+              <button type="button" :disabled="readingImages" :aria-label="`移除图片 ${index + 1}`" @click="images.splice(index, 1)"><X :size="14" /></button>
+            </div>
+          </div>
+          <p v-if="imageError || imageModelError" class="px-5 pt-3 text-xs text-rose-300" role="alert">{{ imageError || imageModelError }}</p>
+          <p v-if="readingImages" class="px-5 pt-3 text-xs text-slate-400" role="status">正在读取图片…</p>
+        </div>
+        <div class="composer" @dragover.prevent @drop.prevent="onDrop" @paste="onPaste">
           <textarea ref="textarea" v-model="draft" rows="1" aria-label="消息输入框" :disabled="!session || connection !== 'connected' || session.isStreaming" :placeholder="!session ? '新建对话，开始与 Pi 协作' : connection !== 'connected' ? '正在连接服务器…' : session.isStreaming ? 'Pi 正在回复…' : '给 Pi 发送消息'" class="block max-h-[180px] w-full resize-none bg-transparent text-slate-100 outline-none placeholder:text-slate-500 disabled:opacity-60" @input="resizeTextarea" @keydown="onKeydown" />
-          <div class="composer-toolbar">
+          <button v-if="session?.isStreaming" type="button" class="composer-submit send-button send-button--stop" aria-label="取消生成" title="取消生成" @click="store.abort(session.summary.id)"><Square :size="13" fill="currentColor" /></button>
+          <button v-else type="button" class="composer-submit send-button" :disabled="!canSend" aria-label="发送消息" title="发送消息" @click="send"><ArrowUp :size="20" :stroke-width="2" /></button>
+        </div>
+        <div class="composer-toolbar" role="group" aria-label="对话设置与附件">
+            <button type="button" class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-slate-100 disabled:opacity-40" :disabled="!canAttach || images.length >= MAX_IMAGES" aria-label="上传图片" title="上传图片（最多 4 张，每张 5 MB）" @click="imageInput?.click()"><ImagePlus :size="18" /></button>
             <PrimaryAgentSelector :agents="store.primaryAgents" :selected="session?.primaryAgentId" :disabled="!session || session.isStreaming || connection !== 'connected'" :changing="changingPrimary" @select="session && store.setPrimaryAgent(session.summary.id, $event)" />
             <ModelSelector :models="store.models" :selected="session?.model" :disabled="!session || session.isStreaming || changingPrimary || connection !== 'connected'" @select="setModel" />
             <ThinkingLevelSelector v-if="session" :selected="session.thinkingLevel" :disabled="session.isStreaming || changingPrimary || connection !== 'connected'" @select="setThinking" />
             <div class="ml-auto flex items-center gap-3">
               <ContextUsageIndicator :usage="session?.contextUsage" />
-              <button v-if="session?.isStreaming" type="button" class="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-400/15 text-rose-300 transition hover:bg-rose-400/25" aria-label="取消生成" title="取消生成" @click="store.abort(session.summary.id)"><Square :size="13" fill="currentColor" /></button>
-              <button v-else type="button" class="send-button" :disabled="!canSend" aria-label="发送消息" title="发送消息" @click="send"><ArrowUp :size="20" :stroke-width="2" /></button>
             </div>
-          </div>
         </div>
-        <div class="composer-hint"><span>Enter 发送 · Shift + Enter 换行<span class="hidden sm:inline"> · Tab 切换角色</span></span></div>
+        <div class="composer-hint"><span>Enter 发送 · Shift + Enter 换行<span class="hidden sm:inline"> · 可粘贴或拖入图片 · Tab 切换角色</span></span></div>
     </div>
   </section>
   <SubagentPanel v-if="selectedTool" :key="session?.summary.id" :tool="selectedTool" :agents="subagents" @close="selectedSubagent = undefined" @select="selectedSubagent = $event" />

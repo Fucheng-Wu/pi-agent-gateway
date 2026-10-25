@@ -46,6 +46,7 @@ Built on `@earendil-works/pi-coding-agent`. This is an independent project, not 
 | Capability | What you can do |
 | --- | --- |
 | Conversations | Create and switch sessions; restore saved Pi JSONL conversations |
+| Image questions | Upload, paste, or drop images; preview and remove attachments, send image-only prompts, and restore images from conversation history |
 | Live execution | Read reasoning as it streams; it collapses when answer text starts and can be reopened |
 | Projects | Browse directories and switch recent projects without restarting; see the project in the sidebar and hover for its full path |
 | Run review | Inspect file diffs and root-session Bash commands/results from the latest task |

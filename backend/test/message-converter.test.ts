@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { convertMessages } from "../src/lib/message-converter.js";
+import { convertMessages, titleFromMessages } from "../src/lib/message-converter.js";
 
 test("converting only a recent turn preserves IDs from the complete history", () => {
   const messages = [
@@ -8,6 +8,18 @@ test("converting only a recent turn preserves IDs from the complete history", ()
     { role: "user", content: "current" }, { role: "assistant", content: [{ type: "text", text: "current answer" }] },
   ];
   assert.deepEqual(convertMessages(messages.slice(2), 2), convertMessages(messages).slice(2));
+});
+
+test("user images survive live conversion and JSON history restoration", () => {
+  const image = { type: "image", mimeType: "image/png", data: "aGVsbG8=" };
+  const raw = [{ role: "user", content: [{ type: "text", text: "Describe this" }, image, { type: "image", mimeType: "image/svg+xml", data: "invalid" }] },
+    { role: "user", content: [image] }];
+  const converted = convertMessages(JSON.parse(JSON.stringify(raw)));
+  assert.equal(converted[0].text, "Describe this");
+  assert.deepEqual(converted[0].images, [{ mimeType: image.mimeType, data: image.data }]);
+  assert.equal(converted[1].text, "");
+  assert.deepEqual(converted[1].images, converted[0].images);
+  assert.equal(titleFromMessages([converted[1]]), "图片问答");
 });
 
 test("combines tool calls and the final answer into one assistant turn", () => {

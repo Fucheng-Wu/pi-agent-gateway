@@ -95,6 +95,10 @@ Wait for the role's `session_state` and model's `session_updated` responses befo
 {"type":"prompt","sessionId":"YOUR_SESSION_ID","text":"Explain this project's architecture.","requestId":"prompt-1"}
 ```
 
+To ask about images, add `images: [{ mimeType: "image/png", data: "RAW_BASE64_BYTES", name: "optional.png" }]`. `data` must contain base64 bytes without a data URL prefix. PNG, JPEG, GIF, and WebP are supported, with at most four images per prompt and 5 MiB per image. `text` may be empty when images are present. The console supports file selection, clipboard paste, and drag-and-drop, with previews before sending.
+
+Choose a model whose catalog entry has `supportsImages: true`; image prompts sent to text-only models are rejected before execution. For custom model configurations, set `input: ["text", "image"]` only when the upstream model supports images. Pi may resize images to meet provider limits. User `message_end` events and `session_state.session.messages` include the processed `images` for display and history restoration; original filenames are optional and are not persisted by Pi. Images are stored in the session's Pi JSONL history. The WebSocket accepts messages up to 32 MiB to accommodate base64 overhead.
+
 Execution events are top-level messages, without a nested `session_event.event` envelope. Examples below are individual messages, not an exhaustive or guaranteed event order:
 
 ```json

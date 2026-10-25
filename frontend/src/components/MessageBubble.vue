@@ -3,6 +3,7 @@ import { onUnmounted, ref, watch } from 'vue'
 import { markdown } from '@/lib/markdown'
 import { Bot, Check, Copy } from 'lucide-vue-next'
 import type { ChatMessage } from '@/types'
+import { imageSource } from '../../../shared/images'
 import ThinkingPanel from './ThinkingPanel.vue'
 import ToolExecutionPanel from './ToolExecutionPanel.vue'
 
@@ -41,6 +42,9 @@ async function copyText() {
         <span v-if="streaming" class="h-1.5 w-1.5 rounded-full bg-accent-300 typing-dot" />
       </div>
       <div>
+        <div v-if="message.images?.length" class="message-images">
+          <img v-for="(image, index) in message.images" :key="index" :src="imageSource(image)" :alt="image.name || `上传的图片 ${index + 1}`" loading="lazy" />
+        </div>
         <ThinkingPanel v-if="message.thinking" :text="message.thinking" :streaming="streaming && !message.text" />
         <ToolExecutionPanel v-if="message.tools?.length" :tools="message.tools" :streaming="streaming && !message.text" @subagent="emit('subagent', $event)" />
         <div v-if="message.text" class="markdown" v-html="rendered" />
