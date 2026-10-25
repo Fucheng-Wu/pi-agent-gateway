@@ -23,6 +23,9 @@ importers:
       '@hono/node-server':
         specifier: ^1.19.9
         version: 1.19.17(hono@4.13.13)
+      diff:
+        specifier: 8.0.4
+        version: 8.0.4
       hono:
         specifier: ^4.10.4
         version: 4.13.13
@@ -46,8 +49,17 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  client:
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   frontend:
     dependencies:
+      '@fontsource-variable/noto-sans-sc':
+        specifier: 5.3.1
+        version: 5.3.1
       lucide-vue-next:
         specifier: ^0.468.0
         version: 0.468.0(vue@3.5.44(typescript@5.9.3))
@@ -543,6 +555,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@fontsource-variable/noto-sans-sc@5.3.1':
+    resolution: {integrity: sha512-UB96JJ17HyD5ehEU7Em0hDdh7fvTMB4B4Hzmq5c4QaNwwSLqTrdM2S+coySeBqCkXwh0DxqXT0b0wMrmzorFpQ==}
 
   '@google/genai@2.21.0':
     resolution: {integrity: sha512-+PDtco2/Z0ONdzCGekCoCT+O1VJS9xJQNN4XzQpXG/t3El/SWWMkCWlFRO1KmivOHPa4Q0VjUYu1HBKCZ/v33Q==}
@@ -2158,6 +2173,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.2':
     optional: true
+
+  '@fontsource-variable/noto-sans-sc@5.3.1': {}
 
   '@google/genai@2.21.0':
     dependencies:

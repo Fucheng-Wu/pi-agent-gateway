@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import { mkdtemp, readFile, rm, writeFile, mkdir, access } from "node:fs/promises";
@@ -41,6 +42,8 @@ class Client {
 test("WebSocket roles and approvals govern real SDK tool execution, including child sessions", { timeout: 90_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-gateway-e2e-"));
   const agentDir = join(root, "agent");
+  await promisify(execFile)("git", ["init"], { cwd: root, windowsHide: true });
+  await writeFile(join(root, ".gitignore"), "agent/\n");
   await mkdir(agentDir);
   await mkdir(join(agentDir, "primary-agents"));
   await writeFile(join(agentDir, "primary-agents/confirm.md"), '---\nname: confirm\ntools: ["*"]\npermissions: [{"action":"*","resource":"*","effect":"ask"},{"action":"Agent","resource":"*","effect":"allow"}]\n---\nAsk before modifying files.');
@@ -99,6 +102,10 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     const observer = await connect();
     const init = client.messages.find((item) => item.type === "init");
     assert.ok(init?.type === "init" && init.primaryAgents?.some((item) => item.id === "plan"));
+    assert.ok(init?.type === "init" && init.workspace?.path === root);
+    client.socket.send(JSON.stringify({ type: "set_model", sessionId: 42, requestId: "invalid-command" }));
+    const invalid = await client.wait((item) => item.type === "error" && item.requestId === "invalid-command");
+    assert.ok(invalid.type === "error" && invalid.code === "BAD_REQUEST");
     const created = await client.request({ type: "create_session" }, "session_created");
     assert.equal(created.type, "session_created");
     if (created.type !== "session_created") throw new Error("No session");
@@ -120,6 +127,10 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     await client.wait((item) => item.type === "agent_end", from);
     assert.equal(client.messages.slice(from).filter((item) => item.type === "permission_request").length, 0);
     assert.equal(await readFile(join(root, "approved.txt"), "utf8"), "approved");
+    const review = client.messages.slice(from).find((item) => item.type === "run_review");
+    assert.ok(review?.type === "run_review" && review.review.files.some((file) => file.path === "approved.txt" && file.status === "added" && file.diff?.includes("+approved")));
+    const snapshot = await client.request({ type: "load_session", sessionId }, "session_state");
+    assert.ok(snapshot.type === "session_state" && snapshot.session.epoch && typeof snapshot.session.sequence === "number" && snapshot.session.review?.files.length);
 
     from = client.messages.length;
     client.send({ type: "prompt", sessionId, text: "delegate-write" });
@@ -136,6 +147,7 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     assert.equal(approval.permission.action, "edit");
     assert.deepEqual(approval.permission.patterns, ["*"]);
     await assert.rejects(access(join(root, "confirmed.txt")));
+    await assert.rejects(client.request({ type: "set_workspace", path: root }, "ack"), /等待所有任务/);
     observer.send({ type: "permission_response", permissionId: approval.permission.id, decision: "allow_once" });
     await observer.wait((item) => item.type === "error");
     assert.equal(observer.messages.filter((item) => item.type === "permission_request").length, 0);
@@ -159,6 +171,18 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     await client.wait((item) => item.type === "permission_resolved" && item.decision === "deny", from);
     await client.wait((item) => item.type === "agent_end", from);
     await assert.rejects(access(join(root, "cancelled.txt")));
+
+    const otherProject = join(root, "other-project");
+    await mkdir(otherProject);
+    const switched = await client.request({ type: "set_workspace", path: otherProject }, "ack");
+    assert.equal(switched.type, "ack");
+    await observer.wait((item) => item.type === "workspace" && item.workspace.path === otherProject);
+    const catalog = await client.request({ type: "list_sessions" }, "sessions");
+    assert.ok(catalog.type === "sessions" && !catalog.sessions.some((item) => item.id === sessionId));
+    const returned = await client.request({ type: "set_workspace", path: root }, "ack");
+    assert.equal(returned.type, "ack");
+    const resumed = await client.request({ type: "load_session", sessionId }, "session_state");
+    assert.ok(resumed.type === "session_state" && resumed.session.messages.length && resumed.session.review?.finishedAt);
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.stack : error}\nBackend logs:\n${logs}`);
   } finally {

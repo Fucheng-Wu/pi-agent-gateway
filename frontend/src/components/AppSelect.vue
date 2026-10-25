@@ -164,8 +164,8 @@ onBeforeUnmount(removeListeners)
     <button
       ref="trigger"
       type="button"
-      class="group flex min-w-0 w-full items-center gap-1.5 rounded-lg border border-white/[.09] bg-white/[.045] text-left text-slate-200 shadow-[inset_0_1px_0_rgb(var(--white)/.035)] transition duration-150 hover:border-white/[.16] hover:bg-white/[.075] focus-visible:border-accent-400/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/15 disabled:hover:bg-white/[.045]"
-      :class="compact ? 'h-[30px] px-2 text-[11px]' : 'h-9 px-2.5 text-xs'"
+      class="group flex min-w-0 w-full items-center gap-1.5 rounded-lg border border-white/[.09] bg-transparent text-left text-slate-300 transition duration-150 hover:border-white/[.16] hover:bg-white/[.045] focus-visible:border-accent-400/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/15"
+      :class="compact ? 'h-8 px-2 text-[13px]' : 'h-9 px-2.5 text-sm'"
       :disabled="disabled || !options.length"
       :aria-label="ariaLabel"
       aria-haspopup="listbox"
@@ -175,7 +175,7 @@ onBeforeUnmount(removeListeners)
     >
       <slot name="prefix" />
       <span class="min-w-0 flex-1 truncate" :class="selected ? 'text-slate-200' : 'text-slate-500'">{{ selected?.label ?? placeholder }}</span>
-      <span v-if="selected?.badge" class="hidden rounded-md bg-accent-400/10 px-1.5 py-0.5 text-[9px] text-accent-300 sm:inline">{{ selected.badge }}</span>
+      <span v-if="selected?.badge && !compact" class="hidden rounded-md bg-accent-400/10 px-1.5 py-0.5 text-[10px] text-accent-300 sm:inline">{{ selected.badge }}</span>
       <ChevronDown :size="13" class="shrink-0 text-slate-500 transition-transform duration-200 group-hover:text-slate-300" :class="open ? 'rotate-180' : ''" />
     </button>
 
@@ -187,19 +187,19 @@ onBeforeUnmount(removeListeners)
           tabindex="-1"
           role="listbox"
           :aria-label="ariaLabel"
-          class="fixed z-[100] flex overflow-hidden rounded-xl border border-white/[.11] bg-ink-850/95 shadow-[0_18px_52px_rgba(0,0,0,.34),inset_0_1px_0_rgb(var(--white)/.05)] backdrop-blur-xl focus:outline-none"
+          class="fixed z-[100] flex overflow-hidden rounded-xl border border-white/[.11] bg-ink-850 shadow-panel focus:outline-none"
           :style="position"
           @keydown="onKeydown"
         >
           <div class="flex min-h-0 w-full flex-col p-1">
             <div v-if="searchable" class="mb-0.5 flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-white/[.08] bg-ink-950/65 px-2 focus-within:border-accent-400/40">
               <Search :size="12" class="shrink-0 text-slate-600" />
-              <input ref="searchInput" v-model="query" :placeholder="searchPlaceholder" class="min-w-0 flex-1 bg-transparent text-[11px] text-slate-200 outline-none placeholder:text-slate-600" @input="onSearchInput" />
+              <input ref="searchInput" v-model="query" :placeholder="searchPlaceholder" class="min-w-0 flex-1 bg-transparent text-[13px] text-slate-200 outline-none placeholder:text-slate-600" @input="onSearchInput" />
               <kbd class="mono text-[9px] text-slate-600">ESC</kbd>
             </div>
             <div class="min-h-0 overflow-y-auto overscroll-contain py-0.5">
               <template v-for="group in groups" :key="group.name">
-                <div v-if="group.name" class="sticky top-0 z-10 bg-ink-850/95 px-2 pb-0.5 pt-1.5 text-[8px] font-semibold uppercase tracking-[.12em] text-slate-600 backdrop-blur-xl">{{ group.name }}</div>
+                <div v-if="group.name" class="sticky top-0 z-10 bg-ink-850 px-2 pb-1 pt-2 text-[11px] font-medium text-slate-500">{{ group.name }}</div>
                 <button
                   v-for="option in group.options"
                   :key="option.value"
@@ -214,8 +214,8 @@ onBeforeUnmount(removeListeners)
                   @click="choose(option)"
                 >
                   <span class="min-w-0 flex-1">
-                    <span class="flex items-center gap-1.5"><span class="truncate text-[11px] font-medium" :class="option.value === modelValue ? 'text-accent-300' : 'text-slate-200'">{{ option.label }}</span><span v-if="option.badge" class="rounded bg-white/[.055] px-1 py-px text-[8px] text-slate-500">{{ option.badge }}</span></span>
-                    <span v-if="option.description" class="block truncate text-[9px] leading-4 text-slate-600">{{ option.description }}</span>
+                    <span class="flex items-center gap-1.5"><span class="truncate text-[13px] font-medium" :class="option.value === modelValue ? 'text-accent-300' : 'text-slate-200'">{{ option.label }}</span><span v-if="option.badge" class="rounded bg-white/[.055] px-1 py-px text-[10px] text-slate-500">{{ option.badge }}</span></span>
+                    <span v-if="option.description" class="mt-0.5 block truncate text-[11px] leading-5 text-slate-500">{{ option.description }}</span>
                   </span>
                   <Check v-if="option.value === modelValue" :size="12" class="shrink-0 text-accent-300" />
                 </button>

@@ -26,7 +26,10 @@ function finishedMessage(active: ActiveSession, raw: unknown): ChatMessage | und
   const index = active.session.messages.lastIndexOf(raw as never);
   const role = raw && typeof raw === "object" && "role" in raw ? raw.role : undefined;
   if (index < 0 || (role !== "user" && role !== "assistant")) return undefined;
-  return convertMessages(active.session.messages.slice(0, index + 1)).at(-1);
+  let start = index;
+  while (start > 0 && active.session.messages[start].role !== "user") start--;
+  // Only rebuild this turn, while preserving IDs based on positions in the full branch.
+  return convertMessages(active.session.messages.slice(start, index + 1), start).at(-1);
 }
 
 export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSnapshot?: () => void): void {
@@ -44,6 +47,9 @@ export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSna
           }
           break;
         case "tool_execution_start":
+          if (active.review && event.toolName === "bash" && typeof event.args.command === "string" && active.review.commands.length < 100) {
+            active.review.commands.push({ id: event.toolCallId, command: event.args.command.slice(0, 4000), status: "running" });
+          }
           send({
             type: "tool_start",
             sessionId: active.id,
@@ -64,6 +70,8 @@ export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSna
           });
           break;
         case "tool_execution_end":
+          const command = active.review?.commands.find((item) => item.id === event.toolCallId);
+          if (command) { command.status = event.isError ? "error" : "done"; command.output = resultText(event.result).slice(-4000); }
           send({
             type: "tool_end",
             sessionId: active.id,

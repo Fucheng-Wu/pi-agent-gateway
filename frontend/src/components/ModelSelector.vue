@@ -45,7 +45,7 @@ function onChange(value: string) {
     placement="top"
     :menu-width="300"
     compact
-    class="max-w-[14rem] flex-1 sm:flex-none sm:w-[13rem]"
+    class="min-w-[140px] max-w-[14rem] flex-1 sm:flex-none sm:w-[13rem]"
     @change="onChange"
   >
     <template #prefix><Cpu :size="14" class="shrink-0 text-accent-300" /></template>

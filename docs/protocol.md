@@ -11,7 +11,9 @@ pnpm --filter ./backend dev
 - Health: `GET http://127.0.0.1:3000/api/health`
 - WebSocket: `ws://127.0.0.1:3000/ws`
 - Source of truth: [`shared/types.ts`](../shared/types.ts)
-- Working Node client with request correlation: [`scripts/smoke.mjs`](../scripts/smoke.mjs)
+- Typed client with reconnects and deadlines: [`client/`](../client/README.md)
+- Read-only built-client example: [`examples/client.mjs`](../examples/client.mjs)
+- Working wire-protocol smoke client: [`scripts/smoke.mjs`](../scripts/smoke.mjs)
 
 ## 1. Complete the handshake
 
@@ -21,7 +23,9 @@ The first command must be `init` with `protocolVersion: 1`. Other commands recei
 {"type":"init","protocolVersion":1,"requestId":"init-1"}
 ```
 
-The response is another `init` message containing `protocolVersion`, `sessions`, `models`, `providers`, `settings`, and the current `primaryAgents` catalog. Commands may include a `requestId` of up to 128 characters to correlate direct responses and errors. Broadcast lifecycle events are routed by `sessionId` and are not necessarily request-correlated.
+The response is another `init` message containing `protocolVersion`, `sessions`, `models`, `providers`, `settings`, the current `primaryAgents` catalog, and `workspace: { path, recent }`. Commands may include a non-empty `requestId` of up to 128 characters to correlate direct responses and errors. All command fields are validated at runtime before dispatch. Broadcast lifecycle events are routed by `sessionId` and are not necessarily request-correlated.
+
+Every successfully dispatched command with a `requestId` also receives `{ "type": "ack", "command": "COMMAND_TYPE", "requestId": "..." }`, after any dedicated response. Ignore this extra message when waiting for a payload such as `session_state`. For `prompt`, ack means accepted, not completed; wait for `agent_end`. For login, ack means the login flow started; listen for `auth_status`. A rejected command receives a correlated `error` without ack. On timeout/disconnect, the command outcome can be unknown; resynchronize and do not automatically repeat mutating requests.
 
 This small Node.js 22.19+ example lists catalog counts without creating a session or calling a model. Save it as `catalog.mjs` and run `node catalog.mjs`:
 
@@ -101,7 +105,17 @@ Execution events are top-level messages, without a nested `session_event.event` 
 {"type":"agent_end","sessionId":"YOUR_SESSION_ID"}
 ```
 
-Other events include `thinking_delta`, `tool_update`, `message_end`, and `session_updated`. Reasoning availability depends on the model. Multiple sessions can interleave events on the same connection. `agent_end` may include an `error`; clients should also handle `error` messages and connection loss.
+Other events include `thinking_delta`, `tool_update`, `message_end`, `run_review`, and `session_updated`. Reasoning availability depends on the model. Multiple sessions can interleave events on the same connection. `agent_end` may include an `error`; clients should also handle `error` messages and connection loss. `run_review` contains the latest report with files/diffs, root-session Bash commands, and any omission note; it is also included as `session.review` when loading a snapshot.
+
+### Snapshots and concurrent events
+
+Session snapshots carry `epoch` (a new ID whenever the in-memory session is attached) and `sequence` (the last event included). Each execution event carries the same `epoch` and a strictly increasing `sequence` for that session. These are additive v1 fields; clients that ignore them can still connect.
+
+While requesting a snapshot, buffer live events. Install the authoritative snapshot through sequence N and apply only buffered events from the same epoch with sequence greater than N. Ignore duplicates. If the epoch changes, a sequence gap is detected, or a bounded event buffer overflows, request a fresh snapshot. Never discard the entire snapshot merely because an event arrived during loading: it may contain text missed during disconnection. Reconnect with a fresh init and reload every cached/watched session, including background sessions. There is no event replay cursor.
+
+### Switching projects
+
+`get_workspace` returns `workspace`. `browse_directories` accepts an optional absolute `path` and returns `directories` with `{ path, parent, directories: [{ name, path }] }`. `set_workspace` requires an existing absolute directory. It is rejected while tasks, settings operations, loads, or logins are active. Successful switching broadcasts `workspace` followed by a new `init` catalog to every initialized connection, then acknowledges the request. Clear cached session state when the workspace changes. All connected clients share the current project; this command does not create a separate tenant.
 
 To cancel a task:
 

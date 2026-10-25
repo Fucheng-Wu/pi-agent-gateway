@@ -30,6 +30,9 @@ Set an absolute `PI_WORKSPACE_DIR` if the agent should operate on another projec
 | `backend/test/` | Backend tests, including WebSocket integration |
 | `frontend/src/` | Vue console and client state |
 | `shared/types.ts` | Versioned WebSocket command and event contract |
+| `shared/validation.ts` | Exhaustive runtime validation of client commands |
+| `client/` | Dependency-free typed WebSocket client and build |
+| `examples/client.mjs` | Read-only example using the built client |
 | `backend/primary-agents/` | Built-in role documentation and custom primary-agent resources |
 | `backend/subagents/` | Subagent profiles and examples |
 | `backend/skills/` | Gateway project Skills |

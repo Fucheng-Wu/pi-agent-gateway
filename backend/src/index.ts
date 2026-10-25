@@ -2,7 +2,10 @@ import { unlink } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { WebSocket, WebSocketServer } from "ws";
 import { PROTOCOL_VERSION, type AgentUiEvent, type ClientMessage, type ServerMessage, type SessionSnapshot, type SessionSummary, type ThinkingLevel } from "../../shared/types.js";
@@ -14,35 +17,54 @@ import { createSession, listStoredSessions, resumeSession, sessionDir, runSessio
 import { SessionPool } from "./lib/session-pool.js";
 import { createSharedResources } from "./lib/shared-resources.js";
 import type { ActiveSession } from "./lib/types.js";
+import { validateClientMessage } from "../../shared/validation.js";
+import { WorkspaceManager } from "./lib/workspace-manager.js";
+import { captureWorkspace, compareWorkspace, saveRunReview, deleteRunReview } from "./lib/run-review.js";
 
-const workspace = resolve(process.env.PI_WORKSPACE_DIR || process.cwd());
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const workspaces = new WorkspaceManager(process.env.PI_AGENT_DIR || getAgentDir());
+const workspace = await workspaces.open(projectRoot, process.env.PI_WORKSPACE_DIR);
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be between 1 and 65535");
 
 const resources = await createSharedResources(workspace);
-const models = new ModelManager(resources);
+let models = new ModelManager(resources);
 const pool = new SessionPool(5);
 const clients = new Set<WebSocket>();
 const initializedClients = new WeakSet<WebSocket>();
 const pendingLoads = new Map<string, Promise<ActiveSession>>();
 const clientIds = new WeakMap<WebSocket, string>();
+const authInteractions = new Set<WsAuthInteraction>();
+let switchingWorkspace = false;
+let activeRequests = 0;
 resources.permissions.setNotifier((owner, message) => {
   for (const ws of clients) if (clientIds.get(ws) === owner && initializedClients.has(ws)) send(ws, message);
 });
 
 function send(ws: WebSocket, message: ServerMessage): void {
-  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+  sendEncoded(ws, JSON.stringify(message));
+}
+
+function sendEncoded(ws: WebSocket, encoded: string): void {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  if (ws.bufferedAmount > 8 * 1024 * 1024) { ws.close(1013, "Client too slow; reconnect and reload snapshots"); return; }
+  ws.send(encoded);
 }
 
 function broadcast(message: ServerMessage): void {
+  const encoded = JSON.stringify(message);
   for (const ws of clients) {
-    if (initializedClients.has(ws)) send(ws, message);
+    if (initializedClients.has(ws)) sendEncoded(ws, encoded);
   }
 }
 
 function broadcastEvent(event: AgentUiEvent): void {
-  broadcast(event);
+  const active = pool.values().find((item) => item.id === event.sessionId);
+  if (active) {
+    active.sequence = (active.sequence ?? 0) + 1;
+    broadcast({ ...event, epoch: active.epoch, sequence: active.sequence });
+  }
 }
 
 function notifyCatalogChanged(): void {
@@ -73,6 +95,8 @@ async function sendFeatureSettings(
 }
 
 function attach(active: ActiveSession): ActiveSession {
+  active.epoch = randomUUID();
+  active.sequence = 0;
   pool.add(active);
   attachEventRelay(
     active,
@@ -107,6 +131,9 @@ function snapshot(active: ActiveSession): SessionSnapshot {
     isStreaming: active.session.isStreaming || !!active.promptTask,
     contextUsage: contextUsageFromSession(active.session),
     primaryAgentId: active.role.profile.id,
+    epoch: active.epoch,
+    sequence: active.sequence,
+    review: active.review,
   };
 }
 
@@ -149,14 +176,7 @@ function parseClientMessage(data: WebSocket.RawData): ClientMessage {
   let parsed: unknown;
   try { parsed = JSON.parse(data.toString()); }
   catch { throw new Error("消息不是有效 JSON"); }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || typeof (parsed as { type?: unknown }).type !== "string") {
-    throw new Error("消息缺少 type 字段");
-  }
-  const requestId = (parsed as { requestId?: unknown }).requestId;
-  if (requestId !== undefined && (typeof requestId !== "string" || requestId.length > 128)) {
-    throw new Error("requestId 无效");
-  }
-  return parsed as ClientMessage;
+  return validateClientMessage(parsed);
 }
 
 function lastPromptError(active: ActiveSession): string | undefined {
@@ -170,7 +190,23 @@ function startPrompt(ws: WebSocket, active: ActiveSession, text: string, request
   if (active.promptTask || active.operationTask || !active.session.isIdle) throw new Error("此会话正在工作，请等待或先取消");
   active.role.controller = new AbortController();
   resources.permissions.setOwner(active.id, clientIds.get(ws)!);
-  const task = active.session.prompt(text)
+  active.review = { startedAt: new Date().toISOString(), workspace: resources.cwd, files: [], commands: [] };
+  const task = (async () => {
+    const before = await captureWorkspace(resources.cwd);
+    try {
+      if (active.role.controller.signal.aborted) throw new Error("任务已取消");
+      await active.session.prompt(text);
+    }
+    finally {
+      const review = active.review!;
+      Object.assign(review, compareWorkspace(before, await captureWorkspace(resources.cwd)));
+      review.finishedAt = new Date().toISOString();
+      for (const command of review.commands) if (command.status === "running") command.status = "error";
+      broadcastEvent({ type: "run_review", sessionId: active.id, review });
+      try { await saveRunReview(resources.agentDir, active.id, review); }
+      catch (error) { console.error("Failed to save run review", error); }
+    }
+  })()
     .then(() => {
       active.contextUsage = contextUsageFromSession(active.session);
       broadcastEvent({
@@ -210,6 +246,7 @@ async function deleteSession(sessionId: string): Promise<void> {
     if (!validDeletePath(info.path)) throw new Error("会话文件路径无效");
     await unlink(info.path);
   }
+  await deleteRunReview(resources.agentDir, sessionId);
   broadcast({ type: "session_deleted", sessionId });
   broadcast({ type: "sessions", sessions: await listSessions() });
 }
@@ -230,6 +267,7 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
         providers: models.getProvidersInfo(),
         settings,
         primaryAgents,
+        workspace: workspaces.info(),
         requestId,
       });
       initializedClients.add(ws);
@@ -237,6 +275,33 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
       return;
     }
     case "ping": send(ws, { type: "pong", requestId }); return;
+    case "get_workspace": send(ws, { type: "workspace", workspace: workspaces.info(), requestId }); return;
+    case "browse_directories": send(ws, { type: "directories", listing: await workspaces.browse(message.path), requestId }); return;
+    case "set_workspace": {
+      if (activeRequests > 1 || pendingLoads.size || pool.values().some((active) => active.promptTask || active.operationTask || !active.session.isIdle) || [...authInteractions].some((item) => item.isBusy)) {
+        throw new Error("请等待所有任务、设置操作和登录完成后再切换项目");
+      }
+      switchingWorkspace = true;
+      try {
+        const path = await workspaces.validate(message.path);
+        const next = await createSharedResources(path);
+        // Prepare every fallible catalog read before committing the workspace switch.
+        const [stored, settings, primaryAgents] = await Promise.all([listStoredSessions(next), next.features.getSettings(), next.primaryAgents.list()]);
+        const sessions = stored.map((item) => ({ id: item.id, title: item.name || item.firstMessage.replace(/\s+/g, " ").trim().slice(0, 64) || "新对话", createdAt: item.created.toISOString(), updatedAt: item.modified.toISOString(), messageCount: item.messageCount }));
+        await workspaces.select(path);
+        pool.close();
+        for (const auth of authInteractions) auth.close();
+        Object.assign(resources, next);
+        resources.permissions.setNotifier((owner, notification) => {
+          for (const client of clients) if (clientIds.get(client) === owner && initializedClients.has(client)) send(client, notification);
+        });
+        models = new ModelManager(resources);
+        broadcast({ type: "workspace", workspace: workspaces.info() });
+        // All connected consoles share one workspace and replace their catalogs together.
+        broadcast({ type: "init", protocolVersion: PROTOCOL_VERSION, sessions, settings, primaryAgents, models: models.getModelsInfo(), providers: models.getProvidersInfo(), workspace: workspaces.info() });
+      } finally { switchingWorkspace = false; }
+      return;
+    }
     case "list_sessions": send(ws, { type: "sessions", sessions: await listSessions(), requestId }); return;
     case "create_session": {
       const active = attach(await createSession(resources));
@@ -418,7 +483,9 @@ async function route(ws: WebSocket, auth: WsAuthInteraction, message: ClientMess
 
 const app = new Hono();
 app.get("/api/health", (context) => context.json({ ok: true, service: "pi-agent-gateway" }));
-app.get("/", (context) => context.text("Pi Agent Gateway is running"));
+const webRoot = resolve(projectRoot, "frontend/dist");
+if (existsSync(resolve(webRoot, "index.html"))) app.get("/*", serveStatic({ root: webRoot }));
+else app.get("/", (context) => context.text("Pi Agent Gateway is running. Run pnpm build to serve the web console."));
 
 const server = serve({ fetch: app.fetch, hostname: host, port });
 const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
@@ -449,11 +516,14 @@ wss.on("connection", (ws) => {
   clients.add(ws);
   clientIds.set(ws, randomUUID());
   const auth = new WsAuthInteraction(resources, (message) => send(ws, message), notifyCatalogChanged);
+  authInteractions.add(auth);
   ws.on("message", (data) => {
     let message: ClientMessage;
     try { message = parseClientMessage(data); }
     catch (error) {
-      send(ws, { type: "error", code: "BAD_REQUEST", message: error instanceof Error ? error.message : String(error) });
+      let requestId: string | undefined;
+      try { const raw = JSON.parse(data.toString()); if (typeof raw?.requestId === "string" && raw.requestId.length <= 128) requestId = raw.requestId; } catch { /* Invalid JSON cannot be correlated. */ }
+      send(ws, { type: "error", code: "BAD_REQUEST", requestId, message: error instanceof Error ? error.message : String(error) });
       return;
     }
     if (message.type !== "init" && !initializedClients.has(ws)) {
@@ -465,7 +535,11 @@ wss.on("connection", (ws) => {
       });
       return;
     }
-    void route(ws, auth, message).catch((error) => {
+    if (switchingWorkspace) { send(ws, { type: "error", code: "WORKSPACE_SWITCHING", requestId: message.requestId, message: "正在切换项目，请稍后重试" }); return; }
+    activeRequests++;
+    void route(ws, auth, message).then(() => {
+      if (message.requestId) send(ws, { type: "ack", command: message.type, requestId: message.requestId, ...("sessionId" in message ? { sessionId: message.sessionId } : {}) });
+    }).catch((error) => {
       send(ws, {
         type: "error",
         code: "REQUEST_FAILED",
@@ -473,18 +547,33 @@ wss.on("connection", (ws) => {
         sessionId: "sessionId" in message ? message.sessionId : undefined,
         message: error instanceof Error ? error.message : String(error),
       });
-    });
+    }).finally(() => { activeRequests--; });
   });
-  ws.on("close", () => { resources.permissions.closeOwner(clientIds.get(ws)!); clients.delete(ws); auth.close(); });
+  ws.on("close", () => { resources.permissions.closeOwner(clientIds.get(ws)!); clients.delete(ws); auth.close(); authInteractions.delete(auth); });
   ws.on("error", (error) => console.error("WebSocket error", error));
 });
 
-function shutdown(): void {
+let shuttingDown = false;
+async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  switchingWorkspace = true;
   for (const client of clients) client.close(1001, "Server shutting down");
+  for (const auth of authInteractions) auth.close();
+  const active = pool.values();
+  for (const item of active) { item.role.controller.abort(); resources.permissions.cancelSession(item.id); }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.allSettled(active.map(async (item) => { await item.session.abort(); await item.promptTask; await item.operationTask; })),
+    new Promise<void>((done) => { timer = setTimeout(done, 5000); }),
+  ]);
+  clearTimeout(timer);
   pool.close();
+  const forceClose = setTimeout(() => { for (const client of clients) client.terminate(); }, 1000);
+  forceClose.unref();
   wss.close();
   server.close();
 }
-process.once("SIGINT", shutdown);
-process.once("SIGTERM", shutdown);
+process.once("SIGINT", () => { void shutdown(); });
+process.once("SIGTERM", () => { void shutdown(); });
 console.log(`Pi Agent Gateway listening on http://${host}:${port} (Pi cwd: ${workspace})`);

@@ -108,3 +108,80 @@ test('permission requests queue, resolve individually, and clear on disconnect',
   store.onTransportDisconnected()
   assert.equal(store.permissionRequests.length, 0)
 })
+
+function recoveryStore() {
+  setActivePinia(createPinia())
+  const store = useSessionPool()
+  const sent: any[] = []
+  store.setSender((message) => { sent.push(message); return true })
+  const snapshot = (text = '', sequence = 0, isStreaming = false, epoch = 'server-1') => ({
+    summary: { id: 'recovery', title: 'Recovery', updatedAt: new Date(1).toISOString() },
+    messages: text ? [{ id: 'answer', role: 'assistant' as const, text }] : [],
+    thinkingLevel: 'medium' as const, isStreaming, epoch, sequence
+  })
+  store.handleServerMessage({ type: 'session_state', session: snapshot() })
+  return { store, sent, snapshot }
+}
+
+test('a rejected prompt removes only its optimistic message and restores an actionable session', () => {
+  const { store, sent } = recoveryStore()
+  store.prompt('recovery', 'hello')
+  assert.equal(store.sessionStates.recovery.isStreaming, true)
+  store.handleServerMessage({ type: 'error', requestId: sent[0].requestId, sessionId: 'recovery', message: 'Rejected' })
+  assert.equal(store.sessionStates.recovery.isStreaming, false)
+  assert.equal(store.sessionStates.recovery.messages.length, 0)
+  assert.equal(store.recoveredDrafts.recovery, 'hello')
+  assert.ok(sent.some((message) => message.type === 'load_session'))
+  store.onTransportDisconnected()
+})
+
+test('authoritative snapshots fill missing text and replay only events after their sequence', () => {
+  const { store, sent, snapshot } = recoveryStore()
+  store.handleServerMessage({ type: 'session_state', session: snapshot('A', 1, true) })
+  store.loadSession('recovery')
+  store.handleServerMessage({ type: 'text_delta', sessionId: 'recovery', delta: 'C', epoch: 'server-1', sequence: 3 })
+  store.handleServerMessage({ type: 'text_delta', sessionId: 'recovery', delta: 'D', epoch: 'server-1', sequence: 4 })
+  store.handleServerMessage({ type: 'session_state', requestId: sent.at(-1).requestId, session: snapshot('ABC', 3, true) })
+  assert.equal(store.sessionStates.recovery.messages[0].text, 'ABCD')
+  store.handleServerMessage({ type: 'text_delta', sessionId: 'recovery', delta: 'D', epoch: 'server-1', sequence: 4 })
+  assert.equal(store.sessionStates.recovery.messages[0].text, 'ABCD', 'duplicate sequence must not append twice')
+  store.onTransportDisconnected()
+})
+
+test('reconnect refreshes cached background sessions and accepts a new server epoch', () => {
+  const { store, sent, snapshot } = recoveryStore()
+  store.handleServerMessage({ type: 'session_state', session: snapshot('old', 100, true) })
+  store.activeSessionId = 'other'
+  store.handleServerMessage({ type: 'session_state', session: { ...snapshot(), summary: { ...snapshot().summary, id: 'other' } } })
+  store.onTransportDisconnected()
+  sent.length = 0
+  store.handleServerMessage({ type: 'init', protocolVersion: 1, sessions: [snapshot().summary, { ...snapshot().summary, id: 'other' }], models: [], providers: [], settings: {} as any })
+  assert.deepEqual(sent.filter((message) => message.type === 'load_session').map((message) => message.sessionId).sort(), ['other', 'recovery'])
+  const request = sent.find((message) => message.sessionId === 'recovery')
+  store.handleServerMessage({ type: 'session_state', requestId: request.requestId, session: snapshot('complete', 0, false, 'server-2') })
+  assert.equal(store.sessionStates.recovery.isStreaming, false)
+  assert.equal(store.sessionStates.recovery.messages[0].text, 'complete')
+  store.onTransportDisconnected()
+})
+
+test('request deadlines restore prompt controls without automatically sending the prompt again', (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] })
+  const { store, sent } = recoveryStore()
+  store.prompt('recovery', 'only once')
+  context.mock.timers.tick(30_001)
+  assert.equal(store.sessionStates.recovery.isStreaming, false)
+  assert.equal(sent.filter((message) => message.type === 'prompt').length, 1)
+  store.onTransportDisconnected()
+})
+
+test('event buffer overflow requests another snapshot instead of silently accepting incomplete text', () => {
+  const { store, sent, snapshot } = recoveryStore()
+  store.loadSession('recovery')
+  const requestId = sent.at(-1).requestId
+  for (let sequence = 1; sequence <= 501; sequence++) store.handleServerMessage({ type: 'text_delta', sessionId: 'recovery', delta: 'x', epoch: 'server-1', sequence })
+  store.handleServerMessage({ type: 'session_state', requestId, session: snapshot('', 0, true) })
+  assert.equal(sent.filter((message) => message.type === 'load_session').length, 2)
+  store.handleServerMessage({ type: 'session_state', requestId: sent.at(-1).requestId, session: snapshot('complete', 501, false) })
+  assert.equal(store.sessionStates.recovery.messages[0].text, 'complete')
+  store.onTransportDisconnected()
+})

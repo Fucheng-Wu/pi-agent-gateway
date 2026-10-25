@@ -2,6 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { convertMessages } from "../src/lib/message-converter.js";
 
+test("converting only a recent turn preserves IDs from the complete history", () => {
+  const messages = [
+    { role: "user", content: "earlier" }, { role: "assistant", content: [{ type: "text", text: "earlier answer" }] },
+    { role: "user", content: "current" }, { role: "assistant", content: [{ type: "text", text: "current answer" }] },
+  ];
+  assert.deepEqual(convertMessages(messages.slice(2), 2), convertMessages(messages).slice(2));
+});
+
 test("combines tool calls and the final answer into one assistant turn", () => {
   const messages = convertMessages([
     { role: "user", content: "Can you search?", timestamp: 1 },

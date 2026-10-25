@@ -10,18 +10,36 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let pongTimer: ReturnType<typeof setTimeout> | null = null
 let attempts = 0
 let stopped = true
+let initTimer: ReturnType<typeof setTimeout> | null = null
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+let frame: number | null = null
+const queued: ServerMessage[] = []
+
+function flushMessages() {
+  if (flushTimer) clearTimeout(flushTimer)
+  if (frame !== null) cancelAnimationFrame(frame)
+  flushTimer = null
+  frame = null
+  for (const message of queued.splice(0)) for (const listener of messageListeners) listener(message)
+}
 
 function clearTimers() {
   if (reconnectTimer) clearTimeout(reconnectTimer)
   if (heartbeatTimer) clearInterval(heartbeatTimer)
   if (pongTimer) clearTimeout(pongTimer)
+  if (initTimer) clearTimeout(initTimer)
+  if (flushTimer) clearTimeout(flushTimer)
+  if (frame !== null) cancelAnimationFrame(frame)
+  queued.length = 0
+  initTimer = flushTimer = null
+  frame = null
   reconnectTimer = heartbeatTimer = pongTimer = null
 }
 
 function send(message: ClientMessage): boolean {
   if (!socket || socket.readyState !== WebSocket.OPEN) return false
-  socket.send(JSON.stringify(message))
-  return true
+  try { socket.send(JSON.stringify(message)); return true }
+  catch { return false }
 }
 
 function startHeartbeat() {
@@ -42,25 +60,45 @@ function open() {
 
   ws.onopen = () => {
     if (socket !== ws) return
-    attempts = 0
-    status.value = 'connected'
-    startHeartbeat()
+    status.value = 'connecting'
+    initTimer = setTimeout(() => ws.close(), 10_000)
     for (const listener of openListeners) listener()
   }
 
   ws.onmessage = (event) => {
+    if (socket !== ws) return
     let message: ServerMessage
     try { message = JSON.parse(String(event.data)) as ServerMessage } catch { return }
     if (!message || typeof message.type !== 'string') return
+    if (message.type === 'init') {
+      if (initTimer) clearTimeout(initTimer)
+      initTimer = null
+      attempts = 0
+      status.value = 'connected'
+      startHeartbeat()
+    }
     if (message.type === 'pong') {
       if (pongTimer) clearTimeout(pongTimer)
       pongTimer = null
     }
-    for (const listener of messageListeners) listener(message)
+    if (message.type === 'text_delta' || message.type === 'thinking_delta' || message.type === 'tool_update') {
+      queued.push(message)
+      if (queued.length >= 500) flushMessages()
+      else if (!flushTimer) {
+        frame = requestAnimationFrame(flushMessages)
+        flushTimer = setTimeout(flushMessages, 50) // Hidden tabs still consume events.
+      }
+    } else {
+      flushMessages()
+      for (const listener of messageListeners) listener(message)
+    }
   }
 
   ws.onclose = () => {
     if (socket !== ws) return
+    flushMessages()
+    if (initTimer) clearTimeout(initTimer)
+    initTimer = null
     socket = null
     if (heartbeatTimer) clearInterval(heartbeatTimer)
     if (pongTimer) clearTimeout(pongTimer)

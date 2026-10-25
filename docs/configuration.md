@@ -19,12 +19,12 @@ Set variables in the shell before starting the servers. This project does not au
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PI_WORKSPACE_DIR` | Backend process working directory | Working directory for Pi's file and terminal tools; use an absolute path |
+| `PI_WORKSPACE_DIR` | Last selected project, then Gateway repository root | Startup working directory for Pi's tools; use an absolute path |
 | `PI_AGENT_DIR` | `~/.pi/agent` | Pi configuration and session storage; use an absolute path when overriding it |
 | `HOST` | `127.0.0.1` | Backend bind address |
 | `PORT` | `3000` | Backend port; the development frontend proxy reads the same value |
 
-`pnpm dev` starts each package in its own directory, so its default Pi workspace is `backend/`. To work on a different project:
+Choose a directory in the console's sidebar project picker to switch without restarting. Recent projects and the last selection are saved in `PI_AGENT_DIR/gateway.json`. Switching updates all connected consoles and is rejected while any task, settings request, session load, or provider login is active. Saved conversations stay grouped by project. An explicit environment variable overrides the remembered directory on each startup:
 
 ```powershell
 # PowerShell
@@ -61,6 +61,8 @@ Paths below are relative to `PI_AGENT_DIR` unless noted otherwise:
 | Provider authentication | `auth.json` |
 | Global settings | `settings.json` |
 | Saved conversations | `sessions/`, grouped by workspace |
+| Last workspace and recent projects | `gateway.json` |
+| Latest run report per session | `gateway-reviews/<sessionId>.json` |
 | MCP configuration | `mcp.json` |
 | Global primary agents | `primary-agents/` |
 | Global subagents | `agents/` |
@@ -86,15 +88,21 @@ Keep credentials, personal conversations, and private workspace contents out of 
 | WebSocket returns 403 | Use a local frontend origin on port 5173 or the backend's port; the backend restricts browser origins |
 | No usable model / authentication error | Complete provider authentication or save a compatible endpoint and model, then select it in the conversation |
 | Model discovery fails | The provider may not offer a compatible model-list endpoint; add its documented model ID manually |
-| Pi reads the wrong project | Set an absolute `PI_WORKSPACE_DIR`, then restart the backend |
+| Pi reads the wrong project | Check the sidebar path and select the intended project; `PI_WORKSPACE_DIR` overrides the remembered project at startup |
 | Conversations appear missing | Check both `PI_AGENT_DIR` and `PI_WORKSPACE_DIR`; session listings are workspace-specific |
 | Empty conversation disappears after restart | Pi persists a conversation only after its first assistant message |
 | Resource changes are not visible | Wait until the session is idle, reload resources, or reopen the session |
 
 ## Build and deployment scope
 
-`pnpm build` checks backend types and builds `frontend/dist/`. The backend runs TypeScript through `tsx` and currently serves the health endpoint and WebSocket API; it does not serve the frontend build. `pnpm --filter ./frontend preview` is a static preview and does not provide the development proxy.
+Run `pnpm build`, then `pnpm start`. The backend serves `frontend/dist/`, `/api/health`, and `/ws` at the same address (default `http://127.0.0.1:3000`). The build also produces the standalone TypeScript client under `client/dist/`. The backend runs TypeScript from source through `tsx`, so retain source files and installed runtime dependencies. `pnpm --filter ./frontend preview` is a static preview without an API proxy; use `pnpm start` for the complete application.
 
 The backend has no user authentication or tenant isolation. A production integration needs its own access control, workspace restrictions, and an explicit routing/origin strategy. Merely binding `HOST=0.0.0.0` does not provide those protections or make arbitrary browser origins acceptable.
 
 Primary-agent permission policies are application-level checks. Extensions execute in the backend process and are not sandboxed. See [primary agents and permissions (Chinese)](../backend/primary-agents/README.md) before adding custom tools.
+
+## Run review and long conversations
+
+Each task records the workspace's Git-listed tracked and untracked non-ignored files before and after execution. Diffs use pre-task contents, not HEAD, so existing uncommitted edits are preserved as the baseline. The report includes concurrent edits by users or other sessions and is not proof of which process changed a file. Git-ignored files, external/symbolic-link targets, binary diffs, files above 256 KiB, snapshots above 16 MiB/5,000 files, and diffs beyond 200 files/240,000 characters are omitted or labeled. Non-Git directories retain command reports but cannot show file diffs. Commands shown are root-session Bash tool calls; completion means the tool returned successfully, not that every application-level assertion passed.
+
+The latest report is stored in `gateway-reviews/` and restored with its session. Deleting a conversation deletes its report. These reports can contain project code and command output, so keep this directory private like session history. The UI renders 60 recent messages initially and loads older messages on demand; complete history remains available in the session snapshot. Tool output initially shows its last 12,000 characters, with explicit expansion.

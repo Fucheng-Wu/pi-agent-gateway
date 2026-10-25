@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type {
   AgentUiEvent, ChatMessage, ClientMessage, FeatureSettings, ModelInfo, ProviderInfo, ServerMessage,
-  SessionSnapshot, SessionSummary, SessionUiState, SubagentProfileInfo, ThinkingLevel, ToolCall
+  SessionSnapshot, SessionSummary, SessionUiState, SubagentProfileInfo, ThinkingLevel, ToolCall, WorkspaceInfo, DirectoryListing
 } from '@/types'
 import type { PrimaryAgentInfo, PermissionRequest, PermissionDecision } from '@/types'
 import { PROTOCOL_VERSION } from '@/types'
@@ -25,6 +25,10 @@ function fromSnapshot(snapshot: SessionSnapshot): SessionUiState {
     isStreaming: snapshot.isStreaming,
     contextUsage: snapshot.contextUsage,
     primaryAgentId: snapshot.primaryAgentId ?? 'build',
+    epoch: snapshot.epoch,
+    sequence: snapshot.sequence,
+    review: snapshot.review,
+    revision: 0,
     streamMessageId: snapshot.isStreaming && lastMessage?.role === 'assistant' ? lastMessage.id : undefined
   }
 }
@@ -54,8 +58,17 @@ export const useSessionPool = defineStore('session-pool', () => {
   const notice = ref<{ id: string; text: string; kind: 'error' | 'success' } | null>(null)
   const pendingEvents = new Map<string, AgentUiEvent[]>()
   const loadingSessions = new Set<string>()
-  const revisions = new Map<string, number>()
-  const loadRevisions = new Map<string, number>()
+  const sessionLoading = ref<Record<string, boolean>>({})
+  const loadRequests = new Map<string, string>()
+  const overflowed = new Set<string>()
+  const pendingRequests = new Map<string, { message: ClientMessage; timer: ReturnType<typeof setTimeout> }>()
+  const promptRequests = new Map<string, { requestId: string; optimisticId: string }>()
+  const recoveredDrafts = ref<Record<string, string>>({})
+  const workspace = ref<WorkspaceInfo | null>(null)
+  const workspaceChanging = ref(false)
+  const directoryListing = ref<DirectoryListing | null>(null)
+  const directoriesLoading = ref(false)
+  let browseRequest: string | undefined
   let sender: Sender = () => false
 
   const activeSession = computed(() => activeSessionId.value ? sessionStates.value[activeSessionId.value] : undefined)
@@ -70,8 +83,71 @@ export const useSessionPool = defineStore('session-pool', () => {
   }
 
   function dispatch(message: ClientMessage) {
-    if (!sender(message)) { tell('连接尚未建立，请稍后重试'); return false }
+    const command = { ...message, requestId: message.requestId ?? id('request') }
+    if (!sender(command)) { tell('连接尚未建立，请稍后重试'); return false }
+    const timer = setTimeout(() => {
+      failRequest(command.requestId, '请求超时，结果尚未确认，请检查连接后重试')
+    }, command.type === 'plugin_action' || command.type === 'set_workspace' ? 120_000 : 30_000)
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    pendingRequests.set(command.requestId, { message: command, timer })
     return true
+  }
+
+  function settleRequest(requestId?: string) {
+    if (!requestId) return
+    const pending = pendingRequests.get(requestId)
+    if (pending) clearTimeout(pending.timer)
+    pendingRequests.delete(requestId)
+    return pending?.message
+  }
+
+  function failRequest(requestId: string | undefined, reason: string, sessionId?: string) {
+    const command = settleRequest(requestId)
+    const prompt = [...promptRequests.entries()].find(([key, value]) => value.requestId === requestId || (!requestId && key === sessionId))
+    if (prompt) {
+      const [key, value] = prompt
+      const state = sessionStates.value[key]
+      if (state) {
+        const optimistic = state.messages.find((message) => message.id === value.optimisticId)
+        if (optimistic) recoveredDrafts.value[key] = optimistic.text
+        state.messages = state.messages.filter((message) => message.id !== value.optimisticId)
+        state.isStreaming = false
+        state.streamMessageId = undefined
+        state.revision++
+      }
+      promptRequests.delete(key)
+      loadSession(key)
+    }
+    if (command?.type === 'load_session') {
+      loadingSessions.delete(command.sessionId)
+      delete sessionLoading.value[command.sessionId]
+      loadRequests.delete(command.sessionId)
+      pendingEvents.delete(command.sessionId)
+    }
+    if (command?.type === 'set_primary_agent') {
+      delete primaryAgentChanging.value[command.sessionId]
+      primaryAgentRequests.delete(command.sessionId)
+    }
+    if (command?.type === 'save_models_config') configSaving.value = false
+    if (command?.type === 'discover_provider_models') modelDiscovery.value.loading = false
+    if (command?.type === 'test_model_config') modelTest.value.loading = false
+    if (command?.type === 'browse_directories' && command.requestId === browseRequest) directoriesLoading.value = false
+    if (command?.type === 'set_workspace') workspaceChanging.value = false
+    if (command?.type === 'get_feature_settings') featureSettingsLoading.value = false
+    if (command && ['create_skill', 'set_skill_enabled', 'plugin_action', 'set_plugin_enabled', 'set_subagent_settings', 'set_subagent_profile_enabled', 'create_subagent_profile', 'delete_subagent_profile', 'save_mcp_config'].includes(command.type)) featureAction.value = null
+    if (command?.type === 'permission_response') delete permissionResponding.value[command.permissionId]
+    tell(reason)
+  }
+
+  function browseDirectories(path?: string) {
+    const requestId = id('browse')
+    browseRequest = requestId
+    directoriesLoading.value = true
+    if (!dispatch({ type: 'browse_directories', path, requestId })) directoriesLoading.value = false
+  }
+  function setWorkspace(path: string) {
+    workspaceChanging.value = true
+    if (!dispatch({ type: 'set_workspace', path })) workspaceChanging.value = false
   }
 
   function refreshSessions() { return dispatch({ type: 'list_sessions' }) }
@@ -102,13 +178,24 @@ export const useSessionPool = defineStore('session-pool', () => {
   function loadSession(sessionId: string) {
     if (loadingSessions.has(sessionId)) return true
     loadingSessions.add(sessionId)
-    loadRevisions.set(sessionId, revisions.get(sessionId) ?? 0)
-    if (!dispatch({ type: 'load_session', sessionId })) { loadingSessions.delete(sessionId); loadRevisions.delete(sessionId); return false }
+    sessionLoading.value[sessionId] = true
+    const requestId = id('load')
+    loadRequests.set(sessionId, requestId)
+    if (!dispatch({ type: 'load_session', sessionId, requestId })) { loadingSessions.delete(sessionId); delete sessionLoading.value[sessionId]; loadRequests.delete(sessionId); return false }
     return true
   }
   function onTransportDisconnected() {
     loadingSessions.clear()
-    loadRevisions.clear()
+    sessionLoading.value = {}
+    loadRequests.clear()
+    pendingEvents.clear()
+    overflowed.clear()
+    for (const pending of pendingRequests.values()) clearTimeout(pending.timer)
+    pendingRequests.clear()
+    workspaceChanging.value = false
+    directoriesLoading.value = false
+    authChallenge.value = null
+    authStatus.value = null
     configSaving.value = false
     modelDiscovery.value.loading = false
     modelTest.value.loading = false
@@ -125,14 +212,19 @@ export const useSessionPool = defineStore('session-pool', () => {
   }
   function deleteSession(sessionId: string) { return dispatch({ type: 'delete_session', sessionId }) }
   function prompt(sessionId: string, text: string) {
+    if (loadingSessions.has(sessionId)) { tell('正在同步对话，请稍后发送'); return false }
     const trimmed = text.trim()
     if (!trimmed) return false
-    if (!dispatch({ type: 'prompt', sessionId, text: trimmed })) return false
+    const requestId = id('prompt')
+    const optimisticId = `optimistic-${requestId}`
+    if (!dispatch({ type: 'prompt', sessionId, text: trimmed, requestId })) return false
+    promptRequests.set(sessionId, { requestId, optimisticId })
     const state = sessionStates.value[sessionId]
     if (state) {
-      state.messages.push({ id: id('optimistic'), role: 'user', text: trimmed, timestamp: new Date().toISOString() })
+      state.messages.push({ id: optimisticId, role: 'user', text: trimmed, timestamp: new Date().toISOString() })
       state.isStreaming = true
       state.summary.title = state.summary.title || trimmed.slice(0, 48)
+      state.revision++
     }
     return true
   }
@@ -225,7 +317,8 @@ export const useSessionPool = defineStore('session-pool', () => {
   }
 
   function ensureAssistant(state: SessionUiState): ChatMessage {
-    let message = state.streamMessageId && state.messages.find((m) => m.id === state.streamMessageId)
+    let message = state.messages.at(-1)
+    if (!state.streamMessageId || message?.id !== state.streamMessageId) message = state.messages.find((m) => m.id === state.streamMessageId)
     if (!message) {
       message = { id: id('stream'), role: 'assistant', text: '', thinking: '', tools: [], timestamp: new Date().toISOString() }
       state.messages.push(message)
@@ -242,6 +335,10 @@ export const useSessionPool = defineStore('session-pool', () => {
   }
 
   function applyEvent(state: SessionUiState, event: AgentUiEvent) {
+    if (event.epoch && event.epoch === state.epoch && event.sequence !== undefined && event.sequence <= (state.sequence ?? -1)) return
+    if (event.epoch) state.epoch = event.epoch
+    if (event.sequence !== undefined) state.sequence = event.sequence
+    state.revision++
     switch (event.type) {
       case 'agent_start':
         state.isStreaming = true
@@ -252,7 +349,8 @@ export const useSessionPool = defineStore('session-pool', () => {
         break
       case 'thinking_delta':
         state.isStreaming = true
-        ensureAssistant(state).thinking = (ensureAssistant(state).thinking ?? '') + event.delta
+        const assistant = ensureAssistant(state)
+        assistant.thinking = (assistant.thinking ?? '') + event.delta
         break
       case 'tool_start':
         state.isStreaming = true
@@ -272,7 +370,7 @@ export const useSessionPool = defineStore('session-pool', () => {
         const incoming = event.message
         if (incoming.role === 'user') {
           const index = state.messages.findLastIndex((m) => m.id.startsWith('optimistic-') && m.text === incoming.text)
-          if (index >= 0) { state.messages[index] = incoming; break }
+          if (index >= 0) { state.messages[index] = incoming; promptRequests.delete(state.summary.id); break }
         }
         if (incoming.role === 'assistant' && state.streamMessageId) {
           const index = state.messages.findIndex((m) => m.id === state.streamMessageId)
@@ -289,6 +387,7 @@ export const useSessionPool = defineStore('session-pool', () => {
         break
       }
       case 'agent_end':
+        promptRequests.delete(state.summary.id)
         state.isStreaming = false
         if (state.streamMessageId) {
           const message = state.messages.find((item) => item.id === state.streamMessageId)
@@ -304,6 +403,7 @@ export const useSessionPool = defineStore('session-pool', () => {
           else state.messages.push({ id: id('error'), role: 'assistant', text: '', error: event.error })
         }
         break
+      case 'run_review': state.review = event.review; break
       case 'session_updated':
         if (event.primaryAgentId) state.primaryAgentId = event.primaryAgentId
         if (event.summary) {
@@ -326,29 +426,39 @@ export const useSessionPool = defineStore('session-pool', () => {
   function installSnapshot(snapshot: SessionSnapshot, requestId?: string) {
     const sessionId = snapshot.summary.id
     const existing = sessionStates.value[sessionId]
-    const hasLiveEventsSinceRequest = (revisions.get(sessionId) ?? 0) > (loadRevisions.get(sessionId) ?? Number.POSITIVE_INFINITY)
-    // WS events can overtake a load response. In that case the live state is newer,
-    // even if both arrays happen to contain the same number of messages.
-    const state = existing && hasLiveEventsSinceRequest ? existing : fromSnapshot(snapshot)
+    if (requestId?.startsWith('load-') && loadRequests.get(sessionId) !== requestId) return
+    // A snapshot is authoritative through sequence N; replay only queued events after N.
+    const newerExisting = snapshot.epoch && existing?.epoch === snapshot.epoch && (existing.sequence ?? -1) > (snapshot.sequence ?? -1)
+    const state = newerExisting ? existing : fromSnapshot(snapshot)
+    state.revision = (existing?.revision ?? 0) + 1
     if (requestId && primaryAgentRequests.get(sessionId) === requestId) {
       delete primaryAgentChanging.value[sessionId]
       primaryAgentRequests.delete(sessionId)
     }
-    if (state !== existing) sessionStates.value[sessionId] = state
-    else if (!existing?.summary.updatedAt || snapshot.summary.updatedAt > existing.summary.updatedAt) state.summary = snapshot.summary
+    sessionStates.value[sessionId] = state
     upsertSummary(state.summary)
     loadingSessions.delete(sessionId)
-    loadRevisions.delete(sessionId)
+    delete sessionLoading.value[sessionId]
+    loadRequests.delete(sessionId)
     const backlog = pendingEvents.get(sessionId)
     if (backlog) {
-      for (const event of backlog) applyEvent(state, event)
+      for (const event of backlog) {
+        if (snapshot.epoch && event.epoch !== snapshot.epoch) continue
+        if (event.sequence !== undefined && state.sequence !== undefined && event.sequence > state.sequence + 1) { overflowed.add(sessionId); break }
+        applyEvent(state, event)
+      }
       pendingEvents.delete(sessionId)
     }
+    if (!state.isStreaming) promptRequests.delete(sessionId)
+    if (overflowed.delete(sessionId)) loadSession(sessionId)
   }
 
   function handleServerMessage(message: ServerMessage) {
+    if (message.type === 'error') failRequest(message.requestId, message.message, message.sessionId)
+    else settleRequest(message.requestId)
     switch (message.type) {
       case 'init': {
+        if (message.workspace) workspace.value = message.workspace
         sessions.value = message.sessions
         models.value = message.models
         primaryAgents.value = message.primaryAgents ?? []
@@ -357,6 +467,11 @@ export const useSessionPool = defineStore('session-pool', () => {
         providers.value = message.providers
         featureSettings.value = message.settings
         featureSettingsLoading.value = false
+        const known = new Set(message.sessions.map((session) => session.id))
+        for (const sessionId of Object.keys(sessionStates.value)) {
+          if (!known.has(sessionId)) delete sessionStates.value[sessionId]
+          else loadSession(sessionId)
+        }
         const current = activeSessionId.value
         if (current && message.sessions.some((session) => session.id === current)) loadSession(current)
         else if (message.sessions.length) selectSession([...message.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0].id)
@@ -380,6 +495,12 @@ export const useSessionPool = defineStore('session-pool', () => {
         delete sessionStates.value[message.sessionId]
         pendingEvents.delete(message.sessionId)
         loadingSessions.delete(message.sessionId)
+        delete sessionLoading.value[message.sessionId]
+        loadRequests.delete(message.sessionId)
+        primaryAgentRequests.delete(message.sessionId)
+        for (const [requestId, pending] of pendingRequests) if ('sessionId' in pending.message && pending.message.sessionId === message.sessionId) settleRequest(requestId)
+        promptRequests.delete(message.sessionId)
+        delete recoveredDrafts.value[message.sessionId]
         delete primaryAgentChanging.value[message.sessionId]
         permissionRequests.value = permissionRequests.value.filter((item) => item.sessionId !== message.sessionId)
         if (activeSessionId.value === message.sessionId) {
@@ -395,14 +516,15 @@ export const useSessionPool = defineStore('session-pool', () => {
       case 'tool_end':
       case 'message_end':
       case 'agent_end':
+      case 'run_review':
       case 'session_updated': {
-        revisions.set(message.sessionId, (revisions.get(message.sessionId) ?? 0) + 1)
         const state = sessionStates.value[message.sessionId]
-        if (state) applyEvent(state, message)
+        const gap = state && message.epoch && (message.epoch !== state.epoch || (message.sequence !== undefined && message.sequence > (state.sequence ?? 0) + 1))
+        if (state && !loadingSessions.has(message.sessionId) && !gap) applyEvent(state, message)
         else {
           const backlog = pendingEvents.get(message.sessionId) ?? []
           backlog.push(message)
-          if (backlog.length > 500) backlog.shift()
+          if (backlog.length > 500) { backlog.shift(); overflowed.add(message.sessionId) }
           pendingEvents.set(message.sessionId, backlog)
           if (!loadingSessions.has(message.sessionId)) loadSession(message.sessionId)
         }
@@ -453,20 +575,38 @@ export const useSessionPool = defineStore('session-pool', () => {
           delete primaryAgentChanging.value[message.sessionId]
           primaryAgentRequests.delete(message.sessionId)
         }
-        permissionResponding.value = {}
-        configSaving.value = false
-        modelDiscovery.value.loading = false
-        modelTest.value.loading = false
-        featureSettingsLoading.value = false
-        featureAction.value = null
-        if (message.sessionId) loadingSessions.delete(message.sessionId)
-        tell(message.message)
+        break
+      case 'workspace': {
+        const changed = workspace.value?.path !== message.workspace.path
+        workspace.value = message.workspace
+        workspaceChanging.value = false
+        if (changed) {
+          onTransportDisconnected()
+          promptRequests.clear()
+          recoveredDrafts.value = {}
+          sessionStates.value = {}
+          sessions.value = []
+          activeSessionId.value = null
+          directoryListing.value = null
+          configLoaded.value = false
+        }
+        break
+      }
+      case 'directories':
+        if (!message.requestId || message.requestId === browseRequest) {
+          directoryListing.value = message.listing
+          directoriesLoading.value = false
+        }
+        break
+      case 'ack':
+        if (message.command === 'set_workspace') workspaceChanging.value = false
         break
       case 'pong': break
     }
   }
 
   return {
+    workspace, workspaceChanging, directoryListing, directoriesLoading, browseDirectories, setWorkspace, recoveredDrafts, sessionLoading,
     sessions, sortedSessions, sessionStates, activeSessionId, activeSession, models, providers,
     primaryAgents, primaryAgentChanging, permissionRequests, permissionResponding, setPrimaryAgent, respondPermission,
     modelsConfig, configLoaded, configSaving, modelDiscovery, modelTest, authChallenge, authStatus,

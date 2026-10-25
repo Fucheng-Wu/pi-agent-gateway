@@ -107,6 +107,8 @@ export class WsAuthInteraction {
     }
   }
 
+  get isBusy(): boolean { return this.controllers.size > 0; }
+
   respond(challengeId: string, value: string): void {
     const challenge = this.challenges.get(challengeId);
     if (!challenge) throw new Error("登录请求已过期");

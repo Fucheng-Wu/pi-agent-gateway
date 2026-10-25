@@ -167,6 +167,29 @@ export interface SessionSnapshot {
   isStreaming: boolean;
   contextUsage?: ContextUsage;
   primaryAgentId?: string;
+  epoch?: string;
+  sequence?: number;
+  review?: RunReview;
+}
+
+export interface WorkspaceInfo {
+  path: string;
+  recent: string[];
+}
+
+export interface DirectoryListing {
+  path: string;
+  parent: string | null;
+  directories: Array<{ name: string; path: string }>;
+}
+
+export interface RunReview {
+  startedAt: string;
+  finishedAt?: string;
+  workspace: string;
+  files: Array<{ path: string; status: "added" | "modified" | "deleted"; diff?: string; omitted?: string }>;
+  commands: Array<{ id: string; command: string; status: "running" | "done" | "error"; output?: string }>;
+  note?: string;
 }
 
 export const PROTOCOL_VERSION = 1 as const;
@@ -176,7 +199,7 @@ export const PROTOCOL_VERSION = 1 as const;
  * event lets clients route interleaved output from multiple sessions without
  * unpacking a nested event envelope.
  */
-export type AgentUiEvent =
+export type AgentUiEvent = (
   | { type: "agent_start"; sessionId: string }
   | { type: "text_delta"; sessionId: string; delta: string }
   | { type: "thinking_delta"; sessionId: string; delta: string }
@@ -185,13 +208,18 @@ export type AgentUiEvent =
   | { type: "tool_end"; sessionId: string; toolCallId: string; output?: string; isError?: boolean }
   | { type: "message_end"; sessionId: string; message: ChatMessage }
   | { type: "agent_end"; sessionId: string; contextUsage?: ContextUsage; error?: string }
-  | { type: "session_updated"; sessionId: string; summary?: SessionSummary; model?: { provider: string; id: string }; thinkingLevel?: ThinkingLevel; contextUsage?: ContextUsage; primaryAgentId?: string };
+  | { type: "run_review"; sessionId: string; review: RunReview }
+  | { type: "session_updated"; sessionId: string; summary?: SessionSummary; model?: { provider: string; id: string }; thinkingLevel?: ThinkingLevel; contextUsage?: ContextUsage; primaryAgentId?: string }
+) & { epoch?: string; sequence?: number };
 
 type CommandBase = { requestId?: string };
 
 export type ClientMessage = CommandBase & (
   | { type: "init"; protocolVersion: typeof PROTOCOL_VERSION }
   | { type: "ping" }
+  | { type: "get_workspace" }
+  | { type: "browse_directories"; path?: string }
+  | { type: "set_workspace"; path: string }
   | { type: "list_sessions" }
   | { type: "create_session" }
   | { type: "list_primary_agents" }
@@ -225,7 +253,10 @@ export type ClientMessage = CommandBase & (
 );
 
 export type ServerMessage = (
-  | { type: "init"; protocolVersion: typeof PROTOCOL_VERSION; sessions: SessionSummary[]; models: ModelInfo[]; providers: ProviderInfo[]; settings: FeatureSettings; primaryAgents?: PrimaryAgentInfo[] }
+  | { type: "init"; protocolVersion: typeof PROTOCOL_VERSION; sessions: SessionSummary[]; models: ModelInfo[]; providers: ProviderInfo[]; settings: FeatureSettings; primaryAgents?: PrimaryAgentInfo[]; workspace?: WorkspaceInfo }
+  | { type: "ack"; command: ClientMessage["type"]; sessionId?: string }
+  | { type: "workspace"; workspace: WorkspaceInfo }
+  | { type: "directories"; listing: DirectoryListing }
   | { type: "primary_agents"; agents: PrimaryAgentInfo[] }
   | { type: "permission_request"; permission: PermissionRequest }
   | { type: "permission_resolved"; permissionId: string; sessionId: string; decision: PermissionDecision; reason?: string }

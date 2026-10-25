@@ -42,12 +42,13 @@ function toolOutput(value: unknown): string {
 }
 
 /** Builds a transcript from the current Pi branch, joining tool results to their calls. */
-export function convertMessages(messages: readonly unknown[]): ChatMessage[] {
+export function convertMessages(messages: readonly unknown[], indexOffset = 0): ChatMessage[] {
   const converted: ChatMessage[] = [];
   const tools = new Map<string, ToolCall>();
   let assistantTurn: ChatMessage | undefined;
 
   messages.forEach((raw, index) => {
+    index += indexOffset;
     const item = record(raw);
     if (!item) return;
     const id = string(item.id) ?? `message-${index}`;

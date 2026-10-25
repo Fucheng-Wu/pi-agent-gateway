@@ -4,6 +4,7 @@ import { contextUsageFromSession } from "./message-converter.js";
 import type { SharedResources } from "./shared-resources.js";
 import type { ActiveSession } from "./types.js";
 import type { RoleRuntime } from "./permissions.js";
+import { loadRunReview } from "./run-review.js";
 
 async function buildSession(resources: SharedResources, manager: SessionManager, role: RoleRuntime, previous?: ActiveSession) {
   const resourceLoader = await resources.features.createResourceLoader(role);
@@ -89,5 +90,6 @@ export async function resumeSession(resources: SharedResources, info: SessionInf
     },
     contextUsage: contextUsageFromSession(session),
     lastAccessAt: Date.now(),
+    review: await loadRunReview(resources.agentDir, session.sessionId),
   };
 }

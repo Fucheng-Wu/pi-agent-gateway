@@ -8,18 +8,21 @@ import ChatView from '@/components/ChatView.vue'
 import SessionSidebar from '@/components/SessionSidebar.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import PermissionDialog from '@/components/PermissionDialog.vue'
+import WorkspacePicker from '@/components/WorkspacePicker.vue'
 
 const store = useSessionPool()
 const { activeSession, notice } = storeToRefs(store)
 const { status } = useEventBridge()
 const mobileOpen = ref(false)
 const panel = ref<'settings' | null>(null)
+const workspaceOpen = ref(false)
 </script>
 
 <template>
   <div class="flex h-full min-h-0 bg-ink-950 text-slate-100">
-    <SessionSidebar :connection="status" :mobile-open="mobileOpen" @close="mobileOpen = false" @settings="panel = 'settings'" />
-    <ChatView :session="activeSession" :connection="status" @menu="mobileOpen = true" />
+    <SessionSidebar :connection="status" :mobile-open="mobileOpen" @close="mobileOpen = false" @settings="panel = 'settings'" @workspace="workspaceOpen = true" />
+    <ChatView :session="activeSession" :connection="status" @menu="mobileOpen = true" @workspace="workspaceOpen = true" @settings="panel = 'settings'" />
+    <WorkspacePicker v-if="workspaceOpen" @close="workspaceOpen = false" />
     <SettingsPanel v-if="panel === 'settings'" @close="panel = null" />
     <PermissionDialog v-if="store.permissionRequests[0]" :key="store.permissionRequests[0].id" :request="store.permissionRequests[0]"
       :busy="store.permissionResponding[store.permissionRequests[0].id]" :remaining="store.permissionRequests.length"

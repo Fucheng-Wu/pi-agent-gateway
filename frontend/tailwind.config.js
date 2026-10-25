@@ -3,7 +3,7 @@ export default {
   content: ['./index.html', './src/**/*.{vue,ts}'],
   theme: {
     extend: {
-      fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
+      fontFamily: { sans: ['var(--font-sans)'] },
       colors: {
         ink: Object.fromEntries([950, 900, 850, 800, 700].map((shade) => [shade, `rgb(var(--ink-${shade}) / <alpha-value>)`])),
         slate: Object.fromEntries([100, 200, 300, 400, 500, 600].map((shade) => [shade, `rgb(var(--slate-${shade}) / <alpha-value>)`])),

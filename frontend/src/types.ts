@@ -17,10 +17,11 @@ export type {
   ThinkingLevel,
   ToolCall
 } from '../../shared/types'
+export type { RunReview, WorkspaceInfo, DirectoryListing } from '../../shared/types'
 export type { PrimaryAgentInfo, PermissionRequest, PermissionDecision, PermissionRule } from '../../shared/types'
 export { PROTOCOL_VERSION } from '../../shared/types'
 
-import type { ChatMessage, ContextUsage, SessionSummary, ThinkingLevel } from '../../shared/types'
+import type { ChatMessage, ContextUsage, SessionSummary, ThinkingLevel, RunReview } from '../../shared/types'
 
 export interface SessionUiState {
   summary: SessionSummary
@@ -31,6 +32,10 @@ export interface SessionUiState {
   contextUsage?: ContextUsage
   streamMessageId?: string
   primaryAgentId?: string
+  epoch?: string
+  sequence?: number
+  review?: RunReview
+  revision: number
 }
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'

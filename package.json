@@ -11,9 +11,12 @@
   "packageManager": "pnpm@10.22.0",
   "scripts": {
     "dev": "concurrently -k -n backend,frontend \"pnpm --filter ./backend dev\" \"pnpm --filter ./frontend dev\"",
-    "build": "pnpm --filter ./backend build && pnpm --filter ./frontend build",
-    "typecheck": "pnpm --filter ./backend typecheck && pnpm --filter ./frontend typecheck",
+    "build": "pnpm --filter ./backend build && pnpm --filter ./frontend build && pnpm --filter ./client build",
+    "start": "pnpm --filter ./backend start",
+    "example:client": "node examples/client.mjs",
+    "typecheck": "pnpm --filter ./backend typecheck && pnpm --filter ./frontend typecheck && pnpm --filter ./client typecheck",
     "test:frontend": "pnpm --filter ./backend exec tsx --tsconfig ../frontend/tsconfig.json --test ../frontend/test/*.test.ts",
+    "test": "pnpm --filter ./backend test && pnpm test:frontend",
     "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {

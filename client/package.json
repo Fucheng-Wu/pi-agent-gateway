@@ -1,0 +1,11 @@
+{
+  "name": "@pi-agent-gateway/client",
+  "version": "0.1.0",
+  "description": "Typed WebSocket client for Pi Agent Gateway in browsers and Node.js 22+.",
+  "license": "MIT",
+  "type": "module",
+  "exports": { ".": { "types": "./dist/client/src/index.d.ts", "import": "./dist/client/src/index.js" } },
+  "files": ["dist", "README.md"],
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit" },
+  "devDependencies": { "typescript": "^5.9.3" }
+}

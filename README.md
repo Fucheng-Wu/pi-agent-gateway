@@ -36,6 +36,8 @@ Built on `@earendil-works/pi-coding-agent`. This is an independent project, not 
 | --- | --- |
 | Conversations | Create and switch sessions; restore saved Pi JSONL conversations |
 | Live execution | Read reasoning as it streams; it collapses when answer text starts and can be reopened |
+| Projects | Browse directories and switch recent projects without restarting; always see the active directory |
+| Run review | Inspect file diffs and root-session Bash commands/results from the latest task |
 | Plan / Build | Change the primary agent in an idle session without losing history or model selection |
 | Permissions | Routine Build operations run automatically; approve sensitive access once or by a visible session scope |
 | Models | Authenticate built-in providers or configure compatible endpoints; discover models and test connections |
@@ -79,7 +81,9 @@ Otherwise, open **Settings (`设置`) → Models (`模型`) → Add Provider (`�
 
 ### 3. Point Pi at your project
 
-Stop the development servers and set an **absolute** workspace path before restarting:
+Click the project directory in the sidebar, browse folders or enter an **absolute** path, and choose **使用此项目**. Recent projects are saved. Switching is blocked while tasks, settings operations, or login flows are running. All windows connected to the same backend share its active project.
+
+You can also select the startup project through an environment variable:
 
 **PowerShell**
 
@@ -94,7 +98,7 @@ pnpm dev
 PI_WORKSPACE_DIR=/absolute/path/to/your/project pnpm dev
 ```
 
-Without this setting, the root `pnpm dev` command uses `backend/` as Pi's working directory.
+Startup uses `PI_WORKSPACE_DIR`, then the last selected project, then the Gateway repository root. The home screen guides you through choosing a project and configuring a model.
 
 ### 4. Try a first task
 
@@ -125,7 +129,7 @@ flowchart LR
     Pi <--> Tools[Workspace tools and extensions]
 ```
 
-Start with the [protocol guide](./docs/protocol.md), the [shared TypeScript contract](./shared/types.ts), and the existing [WebSocket smoke client](./scripts/smoke.mjs). The backend currently runs from source; it is not published as a standalone SDK package.
+Start with the [TypeScript client](./client/README.md), [protocol guide](./docs/protocol.md), and [shared contract](./shared/types.ts). The client handles handshake, timeouts, reconnects, session refresh, and permission callbacks. After building, run `pnpm example:client` for a read-only integration example. The client package has not been published to npm.
 
 ## Current scope
 
@@ -145,7 +149,9 @@ pnpm --filter ./backend test
 pnpm test:frontend
 ```
 
-`pnpm build` checks backend types and produces the frontend's static build. It does not create a combined production server. Backend tests include a local mock model provider and do not require a paid model key.
+`pnpm build` checks backend types and builds the web console and client package. Then `pnpm start` serves both the console and API at **<http://127.0.0.1:3000>**. The backend still runs from source using `tsx`. Backend tests use a local mock model provider and do not require a paid model key.
+
+Long conversations initially render the latest 60 messages, with a control to load earlier messages. Streaming updates are frame-batched and tool output previews are bounded. The latest run review is saved with the session. File diffs require Git and compare against pre-task contents, including concurrent manual/other-session edits; binary, oversized, or omitted content is labeled. See [configuration](./docs/configuration.md) for limits and storage.
 
 With a backend running, `pnpm smoke` checks the WebSocket handshake, catalogs, session lifecycle, and an authentication challenge. It creates and deletes a temporary empty session and cancels the challenge without saving credentials.
 
