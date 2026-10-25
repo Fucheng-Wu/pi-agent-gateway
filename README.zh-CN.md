@@ -4,12 +4,13 @@
 
 **给 Pi Coding Agent 一个可视化工作台，并把 Agent 后端接入你自己的应用。**
 
-在浏览器中管理对话、模型、Skills、MCP 和子代理，也可以使用独立后端构建自己的客户端。
+选择项目，用 Plan 理清思路、用 Build 实施修改，再检查文件 diff 和执行结果。也可以通过 TypeScript 客户端把这套能力接入自己的应用。
 
 [English](./README.md) · [简体中文](./README.zh-CN.md)
 
 [![Node.js](https://img.shields.io/badge/Node.js-22.19%2B-417E38?logo=nodedotjs&logoColor=white)](#快速开始)
 [![pnpm](https://img.shields.io/badge/pnpm-10.22.0-F69220?logo=pnpm&logoColor=white)](./package.json)
+[![CI](https://github.com/Fucheng-Wu/pi-agent-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Fucheng-Wu/pi-agent-gateway/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-A78BFA)](./LICENSE)
 
 [快速开始](#快速开始) · [功能](#功能) · [接入自己的应用](#接入自己的应用) · [参与贡献](./CONTRIBUTING.md)
@@ -18,7 +19,16 @@
 
 ![Pi Agent Gateway 连接本地后端后的真实控制台](./docs/images/console.png)
 
-*使用全新配置截取的真实界面，尚未进行模型对话。*
+*新版亮色控制台：使用隔离环境中的演示会话展示排版、思考区和工具卡片；会话内容及工具结果为模拟数据，未调用模型。*
+
+<details>
+<summary>查看暗色界面</summary>
+
+![Pi Agent Gateway 暗色控制台](./docs/images/console-dark.png)
+
+*同一演示会话的暗色界面。默认使用亮色主题，并记住你的主题选择。*
+
+</details>
 
 ## 为什么做这个项目？
 
@@ -26,7 +36,8 @@ Pi Agent Gateway 为 Pi 提供浏览器工作台，并通过有类型定义的 W
 
 - **看得见执行过程**：在同一个对话里查看流式回复、模型提供的思维过程、工具输入与执行结果。
 - **先规划，再实现**：在 Plan 和 Build 之间切换，保留同一份会话历史。
-- **界面由你决定**：前后端是独立工作区，通过 [`shared/types.ts`](./shared/types.ts) 中的协议通信。
+- **检查实际结果**：任务结束后查看本轮文件 diff、命令输出和失败情况。
+- **界面由你决定**：使用附带的 Vue 控制台，或通过 [TypeScript 客户端](./client/README.md) 和 [WebSocket 协议](./docs/protocol.md) 接入自己的前端。
 
 基于 `@earendil-works/pi-coding-agent` 构建。这是独立项目，并非 Pi 官方产品。
 
@@ -35,22 +46,23 @@ Pi Agent Gateway 为 Pi 提供浏览器工作台，并通过有类型定义的 W
 | 能力 | 你可以做什么 |
 | --- | --- |
 | 多会话 | 创建、切换对话，从 Pi JSONL 文件恢复已保存的历史 |
-| 项目选择 | 浏览目录、切换最近项目，无需重启；当前目录始终可见 |
+| 项目选择 | 浏览目录、切换最近项目，无需重启；侧栏显示当前项目，悬停查看完整路径 |
 | 本轮变更 | 查看任务期间的文件 diff、根会话执行的 Bash 命令及结果 |
 | 实时执行 | 思考内容生成时自动展开、正文输出时折叠，可手动回看；查看工具输入与结果 |
 | Plan / Build | 在会话空闲时切换主代理，保留历史、模型及思考强度 |
 | 权限确认 | Build 常规操作自动执行；敏感访问可本次允许、按展示范围本会话允许或拒绝 |
 | 模型管理 | 认证内置 Provider，配置兼容端点，发现模型并测试连接 |
 | 扩展管理 | 在设置中管理 Skills、插件、子代理及 MCP 配置 |
-| 自定义客户端 | 通过 `/ws` 接收带版本、按会话区分的消息与事件 |
-| 主题 | 切换亮色与暗色界面 |
+| 会话恢复 | 请求失败或超时后恢复输入状态；重连时同步前台和已缓存的后台会话，使用事件序号处理重复和缺失 |
+| 自定义客户端 | TypeScript 客户端封装握手、请求关联、超时、心跳、重连、会话订阅和权限回调 |
+| 阅读与主题 | 内置中文字体，统一 Markdown 标题、列表、代码和表格；长对话分批展示，支持亮暗主题与窄屏布局 |
 
 <details>
 <summary>查看模型与扩展设置界面</summary>
 
 ![模型、技能、插件、子代理与 MCP 设置](./docs/images/settings.png)
 
-*使用全新配置截取的真实设置页。可用 Provider 取决于 Pi 运行时和你的配置。*
+*新版真实设置页，使用隔离的演示配置，未展示凭证。可用 Provider 取决于 Pi 运行时和你的配置。*
 
 </details>
 
@@ -64,10 +76,13 @@ Pi Agent Gateway 为 Pi 提供浏览器工作台，并通过有类型定义的 W
 git clone https://github.com/Fucheng-Wu/pi-agent-gateway.git
 cd pi-agent-gateway
 pnpm install
-pnpm dev
+pnpm build
+pnpm start
 ```
 
-打开 **<http://127.0.0.1:5173>**。前端会将 `/ws` 和 `/api` 转发至后端 `127.0.0.1:3000`。
+打开 **<http://127.0.0.1:3000>**，同一个后端同时提供控制台、`/api` 和 `/ws`。首次构建后，后续启动运行 `pnpm start` 即可；更新代码后重新构建。
+
+需要修改代码时使用 `pnpm dev`，开发界面位于 **<http://127.0.0.1:5173>**，自动代理后端请求。完整命令见 [开发与检查](#开发与检查)。
 
 ### 2. 配置模型
 
@@ -89,13 +104,13 @@ pnpm dev
 
 ```powershell
 $env:PI_WORKSPACE_DIR = 'C:\path\to\your\project'
-pnpm dev
+pnpm start
 ```
 
 **macOS / Linux shell**
 
 ```sh
-PI_WORKSPACE_DIR=/absolute/path/to/your/project pnpm dev
+PI_WORKSPACE_DIR=/absolute/path/to/your/project pnpm start
 ```
 
 启动目录优先级为 `PI_WORKSPACE_DIR`、上次选择的项目、Gateway 仓库根目录。首页提供项目和模型配置引导。
@@ -106,7 +121,16 @@ PI_WORKSPACE_DIR=/absolute/path/to/your/project pnpm dev
 
 > 阅读这个项目的入口文件，解释整体架构，找出一个适合改进的小问题，并给出实现计划。
 
-会话空闲后，切换到 **Build** 实现确认过的方案。Build 默认对文件修改、命令执行及其他未明确允许的操作请求确认。在输入框按 `Tab` / `Shift+Tab` 可以循环切换主代理。
+会话空闲后，切换到 **Build** 实现确认过的方案。Build 默认自动执行常规文件修改和命令；文件工具访问工作目录外的路径或读取敏感 `.env` 时需要确认。确认框支持本次允许、按展示范围本会话允许或拒绝。在输入框按 `Tab` / `Shift+Tab` 可以循环切换主代理。
+
+### 5. 检查结果与继续对话
+
+- 展开 **本轮变更**，检查文件 diff、根会话 Bash 命令及其输出。最近一轮报告会随会话恢复。
+- 展开 **思考过程** 或工具卡片回看执行细节；是否有思考输出取决于模型。
+- 长对话首先展示最近 60 条消息，可点击加载更早消息；工具输出默认展示末尾 12,000 个字符，可手动展开。
+- 发送失败或超时后界面会恢复输入状态；断线后自动重连并重新同步会话。结果未确认时，先检查会话状态再决定是否重新发送。
+
+文件 diff 比较的是本轮任务开始前后的工作区内容，也会包含同期手动或其他会话的修改。它需要 Git，省略的文件和内容会在界面中提示，详见 [变更报告与限制](./docs/configuration.md#run-review-and-long-conversations)。
 
 环境变量、数据存储和连接问题见 [配置与排查文档（英文）](./docs/configuration.md)。
 
@@ -129,7 +153,17 @@ flowchart LR
     Pi <--> Tools[工作目录工具与扩展]
 ```
 
-从 [TypeScript 客户端说明](./client/README.md)、[协议指南（英文）](./docs/protocol.md) 和 [TypeScript 消息定义](./shared/types.ts) 开始。客户端封装握手、超时、重连、会话刷新和权限回调；本地构建后运行 `pnpm example:client` 可检查接入。客户端尚未发布到 npm。
+仓库提供本地构建的 **`@pi-agent-gateway/client`**，支持浏览器和 Node.js 22+。后端运行时，在另一个终端执行：
+
+```sh
+pnpm example:client
+```
+
+这个 [只读示例](./examples/client.mjs) 会输出当前项目、会话数和模型数，不创建任务或调用模型。客户端尚未发布到 npm。
+
+接入时，`prompt` 的确认响应表示任务已接受，`agent_end` 才表示本轮结束；自定义界面需要处理权限请求。断线重连会刷新订阅会话，客户端不会自动重发可能已执行的修改请求。
+
+从 [客户端 API 与示例](./client/README.md)、[完整协议指南](./docs/protocol.md) 和 [TypeScript 消息定义](./shared/types.ts) 继续。
 
 ## 配置速查
 
@@ -143,6 +177,7 @@ flowchart LR
 设置中保存的配置接入 Pi 原生资源加载与扩展运行时：
 
 - 模型、认证与设置：`PI_AGENT_DIR` 下的 `models.json`、`auth.json`、`settings.json`。
+- 最近项目与会话报告：`PI_AGENT_DIR` 下的 `gateway.json`、`gateway-reviews/`。
 - 项目技能：[`backend/skills`](./backend/skills/README.md)，同时保留 Pi 原有的全局和项目发现规则。
 - 主代理：[`backend/primary-agents`](./backend/primary-agents/README.md)，可自定义角色、工具白名单和权限。
 - 子代理：[`backend/subagents`](./backend/subagents/README.md)，支持提示词、工具、技能白名单和专属 TypeScript 扩展；全局角色兼容 `~/.pi/agent/agents/`。
@@ -162,13 +197,14 @@ flowchart LR
 ```sh
 pnpm typecheck
 pnpm build
-pnpm --filter ./backend test
-pnpm test:frontend
+pnpm test
 ```
 
 `pnpm build` 检查后端类型、生成前端静态文件和客户端包；然后运行 `pnpm start`，从 **<http://127.0.0.1:3000>** 同时访问控制台和后端。后端仍通过 `tsx` 从源码运行。后端测试使用本地模拟模型服务，无需付费模型密钥。
 
-长对话按 60 条消息分批展示，可点击加载更早消息；流式输出按帧更新，工具输出默认只展示末尾。每轮任务结束后可展开“本轮变更”检查 diff 和命令。文件 diff 需要 Git，比较基准是任务开始前的内容，也会包含同期手动或其他会话的修改；大文件、二进制文件和超出限制的内容会提示省略。最近一轮报告随会话保存，详见 [配置文档](./docs/configuration.md)。
+`pnpm test` 依次执行后端和前端测试；也可分别运行 `pnpm --filter ./backend test`、`pnpm test:frontend`。CI 在 Windows 和 Linux 上运行类型检查、构建和测试。
+
+前端开发运行 `pnpm dev`，访问 `http://127.0.0.1:5173`。中文字体随应用构建，按字形子集加载，不依赖运行时的外部字体服务；字体许可证见 [Noto Sans SC OFL](./frontend/public/fonts/noto-sans-sc-LICENSE.txt)。
 
 后端运行后，可执行 `pnpm smoke` 检查 WebSocket 握手、目录、会话生命周期和认证挑战。它会创建并删除一个测试空会话，并取消认证挑战，不保存凭证。
 
