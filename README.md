@@ -4,7 +4,7 @@
 
 **A web workspace for Pi Coding Agent. An agent backend for your own app.**
 
-Choose a project, explore it in Plan, implement changes in Build, and inspect file diffs and command results. Or use the TypeScript client to bring the same workflow into your own app.
+Choose a project, explore it in Plan, implement changes in Build, and inspect file diffs and command results. Upload a screenshot to ask about an interface or error, and follow delegated work beside the main conversation. Or use the TypeScript client to bring the same workflow into your own app.
 
 [English](./README.md) · [简体中文](./README.zh-CN.md)
 
@@ -13,13 +13,13 @@ Choose a project, explore it in Plan, implement changes in Build, and inspect fi
 [![CI](https://github.com/Fucheng-Wu/pi-agent-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Fucheng-Wu/pi-agent-gateway/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-A78BFA)](./LICENSE)
 
-[Quick start](#quick-start) · [Features](#features) · [Use your own frontend](#use-your-own-frontend) · [Contributing](./CONTRIBUTING.md)
+[Quick start](#quick-start) · [Features](#features) · [Image questions](#image-questions) · [Use your own frontend](#use-your-own-frontend) · [Contributing](./CONTRIBUTING.md)
 
 </div>
 
 ![Pi Agent Gateway web console, connected to a local backend](./docs/images/console.png)
 
-*The updated light-theme console, showing an isolated demo conversation, reasoning section, and tool card. Conversation content and tool results are simulated; no model was called.*
+*The light-theme console in an isolated demo environment: image questions, attachment previews, and conversation controls below the input. Replies are simulated by a local test server.*
 
 <details>
 <summary>See the dark theme</summary>
@@ -35,6 +35,7 @@ Choose a project, explore it in Plan, implement changes in Build, and inspect fi
 Pi Agent Gateway gives Pi a browser interface and exposes its session workflow through a typed WebSocket protocol. Use the included Vue console for local coding tasks, or use the Hono backend as the starting point for an agent feature in your own application.
 
 - **Work visually:** follow streaming replies, reasoning output, and tool execution in one conversation.
+- **Ask with images:** attach screenshots to discuss a UI, error message, or diagram with an image-capable model.
 - **Plan, then build:** switch between planning and implementation while keeping the same conversation history.
 - **Review the result:** inspect file diffs, command output, and failures after each task.
 - **Bring your own interface:** use the included Vue console, or integrate your frontend through the [TypeScript client](./client/README.md) and [WebSocket protocol](./docs/protocol.md).
@@ -47,6 +48,8 @@ Built on `@earendil-works/pi-coding-agent`. This is an independent project, not 
 | --- | --- |
 | Conversations | Create and switch sessions; restore saved Pi JSONL conversations |
 | Image questions | Upload, paste, or drop images; preview and remove attachments, send image-only prompts, and restore images from conversation history |
+| Composer | Keep the send/stop button inside the input; upload images and choose the primary agent, model, and thinking level from the toolbar below |
+| Subagent view | Open an Agent tool call to follow the delegated conversation and its tools beside the main chat; child history is saved with the parent |
 | Live execution | Read reasoning as it streams; it collapses when answer text starts and can be reopened |
 | Projects | Browse directories and switch recent projects without restarting; see the project in the sidebar and hover for its full path |
 | Run review | Inspect file diffs and root-session Bash commands/results from the latest task |
@@ -93,7 +96,18 @@ Otherwise, open **Settings (`设置`) → Models (`模型`) → Add Provider (`�
 
 1. Select a built-in provider and complete its authentication, or add a custom compatible endpoint.
 2. For a custom endpoint, set the API type, Base URL, API Key, and model ID. Use model discovery if the provider supports it.
-3. Save custom model configuration, create a conversation, and choose your model in the composer.
+3. Save custom model configuration, create a conversation, and choose your model from the toolbar **below the message input**.
+
+New conversations use the model defaults in Pi's `settings.json`. To use DeepSeek Flash, merge the following fields into `PI_AGENT_DIR/settings.json` (normally `~/.pi/agent/settings.json`), preserving your other settings:
+
+```json
+{
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-flash"
+}
+```
+
+The provider must be authenticated and the model ID must exist in your catalog. Existing conversations retain their selected model; changing a conversation's model does not save a new global default.
 
 ### 3. Point Pi at your project
 
@@ -122,6 +136,8 @@ Create a conversation, choose **Plan**, and ask:
 
 > Read this project's entry points and explain its architecture. Propose a small improvement and an implementation plan.
 
+Primary-agent, model, thinking-level, image-upload, and context-usage controls sit below the input. The input contains the send button, which becomes a stop button during generation; attachment previews appear above it. `Enter` sends a message and `Shift+Enter` starts a new line.
+
 When the session is idle, switch to **Build** to implement the agreed change. Build runs routine file changes and commands automatically. File tools require approval for paths outside the workspace and sensitive `.env` reads. Approve once, approve the displayed scope for this session, or deny. `Tab` / `Shift+Tab` in the composer cycles primary agents.
 
 ### 5. Review results and continue
@@ -134,6 +150,18 @@ When the session is idle, switch to **Build** to implement the agreed change. Bu
 File diffs compare the workspace before and after the task, including concurrent manual or other-session edits. Git is required, and omitted files/content are labeled. See [run review limits](./docs/configuration.md#run-review-and-long-conversations).
 
 See [configuration and troubleshooting](./docs/configuration.md) for environment variables, storage, and connection problems.
+
+## Image questions
+
+1. Choose a model with the **图像** (Image) badge in the model selector below the input.
+2. Click the upload button in the same toolbar, paste an image into the input, or drop image files onto it. Preview the attachments above the input and remove any you do not need.
+3. Add a question such as “What does this error mean?” or send the images on their own.
+
+Supported formats are **PNG, JPEG, GIF, and WebP**, with up to **4 images per message** and **5 MiB per image**. The console checks file type, size, and decoding before sending. Selecting a text-only model shows a prompt to switch models and disables image submission.
+
+For a custom image-capable model, set its input types to `text, image` in Settings. This must match the upstream model's actual capabilities. Pi may resize images to meet provider limits. Images are saved in Pi's JSONL conversation history and restored when reopening a conversation; rejected requests restore the submitted text and attachments as a draft.
+
+Custom clients can pass `images` alongside `text` in a `prompt` command. See the [image payload and limits](./docs/protocol.md#3-send-a-task-and-consume-events).
 
 ## Use your own frontend
 
