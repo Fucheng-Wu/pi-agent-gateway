@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { PermissionDecision, PermissionRequest, PermissionRule, PrimaryAgentInfo, ServerMessage } from "../../../shared/types.js";
+import type { PermissionDecision, PermissionRequest, PermissionRule, PrimaryAgentInfo, ServerMessage, SubagentRun } from "../../../shared/types.js";
 
 export function matches(pattern: string, value: string): boolean {
   const expression = pattern.split("*").map((part) => part.split("?").map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".")).join(".*");
@@ -139,6 +139,7 @@ export interface RoleRuntime {
   sessionId: string;
   profile: PrimaryAgentInfo;
   controller: AbortController;
+  onSubagentUpdate?: (run: SubagentRun) => void;
 }
 
 async function canonicalPath(path: string): Promise<string> {
@@ -175,21 +176,25 @@ async function toolResource(toolName: string, input: Record<string, unknown>, cw
 /** Shared by root and child sessions, so delegation cannot bypass the root policy. */
 export function createPermissionExtension(
   runtime: RoleRuntime, broker: PermissionBroker, cwd: string,
-  child?: { id: string; name: string; permissions?: PermissionRule[]; tools: string[] },
+  child?: {
+    id: string; name: string; permissions?: PermissionRule[]; tools: string[]; signal?: () => AbortSignal;
+    ancestors?: Array<{ tools: string[]; permissions?: PermissionRule[] }>;
+  },
 ): ExtensionFactory {
   return (pi) => {
     pi.on("tool_call", async (event) => {
-      if (runtime.controller.signal.aborted) return { block: true, reason: "任务已取消" };
+      const signal = child?.signal ? AbortSignal.any([runtime.controller.signal, child.signal()]) : runtime.controller.signal;
+      if (signal.aborted) return { block: true, reason: "任务已取消" };
       if (!child && !runtime.profile.tools.some((pattern) => matches(pattern, event.toolName))) {
         return { block: true, reason: "主代理未获准调用此工具" };
       }
       const { action, resource, external } = await toolResource(event.toolName, event.input, cwd);
-      if (child && !child.tools.some((pattern) => matches(pattern, event.toolName))) {
+      if (child && [child, ...child.ancestors ?? []].some((policy) => !policy.tools.some((pattern) => matches(pattern, event.toolName)))) {
         return { block: true, reason: "子代理未获准调用此工具" };
       }
       const checks = (external ? [action, "external_directory"] : [action]).map((permission) => {
         const effects = [permissionEffect(runtime.profile.permissions, permission, resource)];
-        if (child?.permissions) effects.push(permissionEffect(child.permissions, permission, resource));
+        for (const policy of child ? [child, ...child.ancestors ?? []] : []) if (policy.permissions) effects.push(permissionEffect(policy.permissions, permission, resource));
         return { action: permission, effect: effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : "allow" };
       });
       // Explicit restrictions are evaluated before any remembered approval.
@@ -202,7 +207,7 @@ export function createPermissionExtension(
           agentName: child ? `${runtime.profile.name} / ${child.name}` : runtime.profile.name,
           toolName: event.toolName, resource, input: event.input, action: check.action,
           patterns: approvalPatterns(check.action, resource, ["grep", "find", "ls"].includes(event.toolName)),
-        }, runtime.controller.signal);
+        }, signal);
         if (!allowed) return { block: true, reason: "用户未允许此次操作" };
       }
     });

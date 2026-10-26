@@ -65,6 +65,22 @@ export interface SubagentRun {
   status: "running" | "done" | "error";
   messages: ChatMessage[];
   error?: string;
+  /** Closed agents retain their transcript but cannot accept more tasks. */
+  closed?: boolean;
+  path?: string;
+  parentId?: string;
+  parentPath?: string;
+  phase?: "queued" | "working" | "waiting";
+  communications?: CollaborationMessage[];
+}
+
+export interface CollaborationMessage {
+  id: string;
+  kind: "message" | "result";
+  sender: string;
+  recipient: string;
+  text: string;
+  createdAt: string;
 }
 
 /** Raw base64 image bytes (without a data URL prefix). */
@@ -83,6 +99,7 @@ export interface ChatMessage {
   tools?: ToolCall[];
   timestamp?: string;
   error?: string;
+  collaboration?: CollaborationMessage;
 }
 
 export interface ContextUsage {
@@ -191,6 +208,7 @@ export interface SessionSnapshot {
   epoch?: string;
   sequence?: number;
   review?: RunReview;
+  subagents?: SubagentRun[];
 }
 
 export interface WorkspaceInfo {
@@ -221,6 +239,7 @@ export const PROTOCOL_VERSION = 1 as const;
  * unpacking a nested event envelope.
  */
 export type AgentUiEvent = (
+  | { type: "subagent_update"; sessionId: string; subagent: SubagentRun }
   | { type: "agent_start"; sessionId: string }
   | { type: "text_delta"; sessionId: string; delta: string }
   | { type: "thinking_delta"; sessionId: string; delta: string }

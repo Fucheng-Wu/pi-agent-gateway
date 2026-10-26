@@ -7,6 +7,7 @@ import { useChatScroll } from '@/composables/useChatScroll'
 import type { ConnectionState, ImageAttachment, SessionUiState, ThinkingLevel } from '@/types'
 import { imageSource, IMAGE_MIME_TYPES, MAX_IMAGES } from '../../../shared/images'
 import { readImage } from '@/lib/images'
+import { collaborationTools } from '@/lib/subagents'
 import ContextUsageIndicator from './ContextUsageIndicator.vue'
 import MessageBubble from './MessageBubble.vue'
 import ModelSelector from './ModelSelector.vue'
@@ -34,8 +35,11 @@ const needsModel = computed(() => !store.providers.some((provider) => provider.a
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const { scrollArea, content, following: nearBottom, scrollToBottom, pause, resume, onScroll, onWheel, onTouchStart, onTouchMove, onScrollKey } = useChatScroll()
 const selectedSubagent = ref<string>()
-const subagents = computed(() => props.session?.messages.flatMap(message => message.tools ?? []).filter(tool => tool.name === 'Agent' || tool.subagent) ?? [])
-const selectedTool = computed(() => subagents.value.find(tool => tool.id === selectedSubagent.value))
+const subagents = computed(() => collaborationTools(props.session?.messages ?? [], props.session?.subagents ?? []))
+const selectedTool = computed(() => {
+  const original = props.session?.messages.flatMap(message => message.tools ?? []).find(tool => tool.id === selectedSubagent.value)
+  return subagents.value.find(tool => tool.id === selectedSubagent.value || (original?.subagent && original.subagent.id === tool.subagent?.id))
+})
 const suggestions = ['帮我梳理这个项目的架构', '解释一段代码的工作原理', '一起制定一个实现计划']
 
 const changingPrimary = computed(() => !!props.session && !!store.primaryAgentChanging[props.session.summary.id])
@@ -154,6 +158,7 @@ watch(() => props.session?.isStreaming, () => { if (nearBottom.value) scrollToBo
     <header class="chat-header flex shrink-0 items-center gap-3 px-4 sm:px-8">
       <button type="button" class="rounded-lg p-1.5 text-slate-400 hover:bg-white/5 hover:text-white lg:hidden" aria-label="打开侧栏" @click="emit('menu')"><Menu :size="20" /></button>
       <div class="min-w-0 flex-1"><h1 class="truncate text-slate-100">{{ session ? currentTitle : 'Pi Agent' }}</h1></div>
+      <button v-if="subagents.length" type="button" class="flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-accent-300 hover:bg-white/5" aria-label="查看协作代理" @click="selectedSubagent = selectedTool?.id ?? subagents[0].id"><Bot :size="15" />协作 {{ subagents.length }}<span v-if="subagents.some(agent => agent.status === 'running')" class="h-1.5 w-1.5 rounded-full bg-amber-300" /></button>
       <span v-if="selectedTool" class="shrink-0 text-xs text-slate-500">主代理</span>
       <button type="button" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-white/5 hover:text-slate-100 focus-ring" :aria-label="theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'" :title="theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'" @click="toggleTheme">
         <Sun v-if="theme === 'dark'" :size="18" /><Moon v-else :size="18" />

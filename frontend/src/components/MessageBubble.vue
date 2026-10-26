@@ -38,10 +38,11 @@ async function copyText() {
     </div>
     <div class="message-body" :class="message.role === 'user' ? 'user-bubble' : ''">
       <div v-if="message.role !== 'user'" class="message-label">
-        {{ message.role === 'tool' ? '工具' : 'Pi' }}
+        {{ message.collaboration ? (message.collaboration.kind === 'result' ? '协作结果' : '协作消息') : message.role === 'tool' ? '工具' : 'Pi' }}
         <span v-if="streaming" class="h-1.5 w-1.5 rounded-full bg-accent-300 typing-dot" />
       </div>
       <div>
+        <p v-if="message.collaboration" class="mono mb-2 break-all text-[11px] text-accent-300">{{ message.collaboration.sender }} → {{ message.collaboration.recipient }}</p>
         <div v-if="message.images?.length" class="message-images">
           <img v-for="(image, index) in message.images" :key="index" :src="imageSource(image)" :alt="image.name || `上传的图片 ${index + 1}`" loading="lazy" />
         </div>

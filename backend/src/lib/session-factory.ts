@@ -61,7 +61,10 @@ export async function createSession(resources: SharedResources): Promise<ActiveS
     session,
     manager,
     role,
-    onDispose: () => resources.permissions.cancelSession(session.sessionId, "会话已关闭", true),
+    onDispose: () => {
+      resources.permissions.cancelSession(session.sessionId, "会话已关闭", true);
+      void resources.features.disposeSubagents(session.sessionId);
+    },
     summary: { id: session.sessionId, title: "新对话", createdAt: now, updatedAt: now, messageCount: 0 },
     contextUsage: contextUsageFromSession(session),
     lastAccessAt: Date.now(),
@@ -80,7 +83,10 @@ export async function resumeSession(resources: SharedResources, info: SessionInf
     session,
     manager,
     role,
-    onDispose: () => resources.permissions.cancelSession(session.sessionId, "会话已关闭", true),
+    onDispose: () => {
+      resources.permissions.cancelSession(session.sessionId, "会话已关闭", true);
+      void resources.features.disposeSubagents(session.sessionId);
+    },
     summary: {
       id: session.sessionId,
       title: info.name || info.firstMessage.replace(/\s+/g, " ").trim().slice(0, 64) || "新对话",

@@ -49,7 +49,7 @@ Built on `@earendil-works/pi-coding-agent`. This is an independent project, not 
 | Conversations | Create and switch sessions; restore saved Pi JSONL conversations |
 | Image questions | Upload, paste, or drop images; preview and remove attachments, send image-only prompts, and restore images from conversation history |
 | Composer | Keep the send/stop button inside the input; upload images and choose the primary agent, model, and thinking level from the toolbar below |
-| Subagent view | Open an Agent tool call to follow the delegated conversation and its tools beside the main chat; child history is saved with the parent |
+| Subagent collaboration | Run parallel agents that message peers and delegate nested tasks; follow paths, parent relationships, communication and execution beside the main chat; history is saved with the root conversation |
 | Live execution | Read reasoning as it streams; it collapses when answer text starts and can be reopened |
 | Projects | Browse directories and switch recent projects without restarting; see the project in the sidebar and hover for its full path |
 | Run review | Inspect file diffs and root-session Bash commands/results from the latest task |
@@ -211,7 +211,7 @@ Recent projects are saved in `PI_AGENT_DIR/gateway.json`; latest session reports
 - Permission rules are application-level checks, not an operating-system sandbox. Only install extensions you trust.
 - Up to **5 AgentSession instances** remain active in memory; evicted conversations can be restored from their session files. This is not a user limit or a promise of five simultaneous tasks.
 - Pi writes session files after the first assistant message. Empty conversations do not survive a backend restart.
-- Subagent runs are currently one-shot and cannot be resumed. Resource changes reload idle sessions; busy sessions pick them up after a later reload or reopen.
+- Collaboration agents can continue while their child sessions remain in memory. Restarting, eviction, role changes, resource reloads, or project switching release them; their saved transcripts remain available. The legacy `Agent` tool remains one-shot. See [subagent tools and lifecycle](./backend/subagents/README.md).
 - The web UI is currently in Chinese. Both English and Chinese README files are available.
 
 ## Development

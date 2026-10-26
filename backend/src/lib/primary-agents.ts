@@ -2,6 +2,7 @@ import { readdir, readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { PermissionRule, PrimaryAgentInfo } from "../../../shared/types.js";
 import { parsePermissions } from "./permissions.js";
+import { COLLABORATION_TOOLS, LEGACY_COLLABORATION_TOOLS } from "../../../shared/collaboration.js";
 
 const sensitiveReadPermissions: PermissionRule[] = [
   { action: "read", resource: "*.env", effect: "ask" },
@@ -27,10 +28,11 @@ export const BUILTIN_PRIMARY_AGENTS: PrimaryAgentInfo[] = [
   {
     id: "plan", name: "Plan", description: "只读探索、讨论需求和制定实施计划", mode: "primary", builtIn: true,
     systemPrompt: "你现在处于 Plan 模式。与用户讨论方案，不实施项目修改。仅在用户明确要求保存计划时，可以申请写入 .pi/plans/ 下的计划文档。只委派只读探索任务。用户要求实施时，提示其切换到 Build；不要自行切换角色。",
-    tools: ["read", "grep", "find", "ls", "write", "edit", "Agent"], skills: ["*"], extensions: [],
+    tools: ["read", "grep", "find", "ls", "write", "edit", "Agent", ...COLLABORATION_TOOLS, ...LEGACY_COLLABORATION_TOOLS], skills: ["*"], extensions: [],
     permissions: [
       { action: "*", resource: "*", effect: "deny" }, ...readPermissions,
       { action: "Agent", resource: "*", effect: "allow" },
+      ...[...COLLABORATION_TOOLS, ...LEGACY_COLLABORATION_TOOLS].map((action): PermissionRule => ({ action, resource: "*", effect: "allow" })),
       { action: "edit", resource: ".pi/plans/*.md", effect: "ask" },
       { action: "external_directory", resource: "*", effect: "ask" },
     ],

@@ -1,5 +1,5 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { ChatMessage, ContextUsage, SubagentRun, ToolCall } from "../../../shared/types.js";
+import type { ChatMessage, CollaborationMessage, ContextUsage, SubagentRun, ToolCall } from "../../../shared/types.js";
 import { isImageAttachment } from "../../../shared/images.js";
 
 type RecordLike = Record<string, unknown>;
@@ -60,6 +60,14 @@ export function convertMessages(messages: readonly unknown[], indexOffset = 0): 
     if (!item) return;
     const id = string(item.id) ?? `message-${index}`;
     const at = timestamp(item.timestamp);
+
+    if (item.role === "custom" && item.display === true && ["collaboration-message", "collaboration-result"].includes(String(item.customType))) {
+      assistantTurn = undefined;
+      const envelope = record(record(item.details)?.collaboration);
+      const collaboration = envelope && typeof envelope.id === "string" && typeof envelope.sender === "string" && typeof envelope.recipient === "string" && typeof envelope.text === "string" && typeof envelope.createdAt === "string" && ["message", "result"].includes(String(envelope.kind)) ? envelope as unknown as CollaborationMessage : undefined;
+      converted.push({ id, role: "tool", text: collaboration?.text ?? contentText(item.content), timestamp: at, ...(collaboration ? { collaboration } : {}) });
+      return;
+    }
 
     if (item.role === "user") {
       assistantTurn = undefined;

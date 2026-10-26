@@ -3,6 +3,46 @@ import test from 'node:test'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSessionPool } from '../src/stores/session-pool'
 import type { SubagentRun } from '../src/types'
+import { collaborationTools } from '../src/lib/subagents'
+
+test('background collaboration updates survive parent message replacement and reconnect without duplicate agents', () => {
+  setActivePinia(createPinia())
+  const store = useSessionPool()
+  const summary = { id: 'team', title: 'Collaborate', updatedAt: new Date(1).toISOString() }
+  const run: SubagentRun = { id: 'worker', name: 'Worker', profile: 'explore', task: 'inspect', status: 'running', messages: [] }
+  store.handleServerMessage({ type: 'session_state', session: { summary, messages: [], thinkingLevel: 'medium', isStreaming: true } })
+  store.handleServerMessage({ type: 'subagent_update', sessionId: 'team', subagent: run })
+  store.handleServerMessage({ type: 'tool_start', sessionId: 'team', tool: { id: 'spawn', name: 'spawn_agent', status: 'running' } })
+  store.handleServerMessage({ type: 'tool_end', sessionId: 'team', toolCallId: 'spawn', subagent: run })
+  store.handleServerMessage({ type: 'subagent_update', sessionId: 'team', subagent: { ...run, status: 'done' } })
+  store.handleServerMessage({ type: 'message_end', sessionId: 'team', message: { id: 'parent-final', role: 'assistant', text: 'done', tools: [{ id: 'spawn', name: 'spawn_agent', status: 'done', subagent: run }, { id: 'followup', name: 'followup_agent', status: 'done', subagent: run }] } })
+  let agents = collaborationTools(store.sessionStates.team.messages, store.sessionStates.team.subagents!)
+  assert.equal(agents.length, 1)
+  assert.equal(agents[0].subagent?.status, 'done', 'the latest background state wins over stale tool snapshots')
+  store.handleServerMessage({ type: 'session_state', session: { summary, messages: store.sessionStates.team.messages, subagents: [{ ...run, status: 'error', closed: true }], thinkingLevel: 'medium', isStreaming: false } })
+  agents = collaborationTools(store.sessionStates.team.messages, store.sessionStates.team.subagents!)
+  assert.equal(agents[0].subagent?.closed, true)
+  assert.equal(store.sessionStates.team.isStreaming, false)
+})
+
+test('nested agents and peer communication retain their identity and routing after reconnect', () => {
+  setActivePinia(createPinia())
+  const store = useSessionPool()
+  const summary = { id: 'tree', title: 'Team', updatedAt: new Date(1).toISOString() }
+  const communication = { id: 'mail', kind: 'message' as const, sender: '/root/backend/tester', recipient: '/root/frontend', text: 'Contract confirmed', createdAt: new Date(1).toISOString() }
+  const backend: SubagentRun = { id: 'backend', path: '/root/backend', parentId: '/root', parentPath: '/root', profile: 'explore', name: 'Backend', task: 'API', status: 'running', phase: 'waiting', messages: [] }
+  const tester: SubagentRun = { ...backend, id: 'tester', path: '/root/backend/tester', parentId: 'backend', parentPath: '/root/backend', name: 'Tester', phase: 'queued', communications: [communication] }
+  const frontend: SubagentRun = { ...backend, id: 'frontend', path: '/root/frontend', name: 'Frontend', communications: [communication] }
+  store.handleServerMessage({ type: 'session_state', session: { summary, messages: [], thinkingLevel: 'medium', isStreaming: true, subagents: [backend, frontend] } })
+  store.handleServerMessage({ type: 'subagent_update', sessionId: 'tree', subagent: tester })
+  const snapshot = { summary, messages: store.sessionStates.tree.messages, thinkingLevel: 'medium' as const, isStreaming: true, subagents: store.sessionStates.tree.subagents }
+  store.handleServerMessage({ type: 'session_state', session: JSON.parse(JSON.stringify(snapshot)) })
+  const agents = collaborationTools(store.sessionStates.tree.messages, store.sessionStates.tree.subagents!)
+  assert.deepEqual(agents.map(tool => tool.subagent?.path), ['/root/backend', '/root/backend/tester', '/root/frontend'])
+  assert.equal(agents[1].subagent?.parentId, 'backend')
+  assert.equal(agents[1].subagent?.phase, 'queued')
+  assert.equal(agents[2].subagent?.communications?.[0].sender, '/root/backend/tester')
+})
 
 test('interleaved delegated conversations update independently and survive a reconnect snapshot', () => {
   setActivePinia(createPinia())

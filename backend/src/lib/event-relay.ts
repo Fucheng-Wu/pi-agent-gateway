@@ -38,6 +38,7 @@ function resultText(value: unknown): string {
 function finishedMessage(active: ActiveSession, raw: unknown): ChatMessage | undefined {
   const index = active.session.messages.lastIndexOf(raw as never);
   const role = raw && typeof raw === "object" && "role" in raw ? raw.role : undefined;
+  if (index >= 0 && role === "custom") return convertMessages([raw], index)[0];
   if (index < 0 || (role !== "user" && role !== "assistant")) return undefined;
   let start = index;
   while (start > 0 && active.session.messages[start].role !== "user") start--;
@@ -46,6 +47,7 @@ function finishedMessage(active: ActiveSession, raw: unknown): ChatMessage | und
 }
 
 export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSnapshot?: () => void): void {
+  active.role.onSubagentUpdate = (subagent) => send({ type: "subagent_update", sessionId: active.id, subagent });
   active.unsubscribe = active.session.subscribe((event: AgentSessionEvent) => {
     try {
       switch (event.type) {
