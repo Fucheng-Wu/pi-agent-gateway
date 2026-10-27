@@ -49,7 +49,6 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
   await writeFile(join(agentDir, "primary-agents/confirm.md"), '---\nname: confirm\ntools: ["*"]\npermissions: [{"action":"*","resource":"*","effect":"ask"},{"action":"Agent","resource":"*","effect":"allow"}]\n---\nAsk before modifying files.');
   let receivedImageContent: unknown;
   let modelCalls = 0;
-  const collaboratorRequests: string[] = [];
   const modelServer = createServer(async (request, response) => {
     modelCalls++;
     const chunks: Buffer[] = [];
@@ -61,52 +60,6 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     const afterTool = messages.at(-1)?.role === "tool";
     const imageQuestion = Array.isArray(lastUser?.content) && lastUser.content.some((part) => part.type === "image_url");
     if (imageQuestion) receivedImageContent = lastUser?.content;
-    const collaborator = JSON.stringify(messages.filter((message) => message.role === "system")).includes("你是主代理的协作者");
-    const scenario = [...messages].reverse().find((message) => message.role === "user" && ["team-cycle-main", "team-early-main", "team-continuation-main", "team-plan-main"].some((marker) => JSON.stringify(message.content).includes(marker)));
-    const scenarioText = JSON.stringify(scenario?.content ?? "");
-    const teamCycle = !!scenario;
-    if (collaborator || teamCycle) {
-      const call = (tool: string, input: Record<string, unknown>, index = 0) => ({ index, id: `team_${crypto.randomUUID()}`, type: "function", function: { name: tool, arguments: JSON.stringify(input) } });
-      let teamCalls: ReturnType<typeof call>[] | undefined;
-      let parentAnswer = "Team completed.";
-      if (collaborator) {
-        collaboratorRequests.push(JSON.stringify(messages));
-        await new Promise((done) => setTimeout(done, text.includes("team-child") ? 800 : 30));
-        if (response.destroyed) return;
-      } else {
-        const tools = messages.filter((message) => message.role === "tool") as Array<{ role: string; content: string }>;
-        const assistantCalls = messages.flatMap((message: any) => message.tool_calls ?? []);
-        const called = (name: string) => assistantCalls.some((item: any) => item.function.name === name);
-        const spawned = tools.flatMap((message) => { try { const result = JSON.parse(message.content); return result.agent_id && result.name ? [result] : []; } catch { return []; } });
-        const one = spawned.find((item) => item.name === "One")?.agent_id;
-        const two = spawned.find((item) => item.name === "Two")?.agent_id;
-        if (scenarioText.includes("team-plan-main")) {
-          const latest = messages.slice(messages.indexOf(scenario!));
-          if (!latest.some((message) => message.role === "tool")) teamCalls = [call("spawn_agent", { profile: "general-purpose", task: "forbidden delegation" })];
-        } else if (scenarioText.includes("team-continuation-main")) {
-          const latest = messages.slice(messages.indexOf(scenario!));
-          const recentCalls = latest.flatMap((message: any) => message.tool_calls ?? []);
-          const earlyId = spawned.find((item) => item.name === "Early")?.agent_id;
-          if (!recentCalls.some((item: any) => item.function.name === "resume_agent")) teamCalls = [call("resume_agent", { agent_id: earlyId, task: "team-continued" })];
-          else if (!recentCalls.some((item: any) => item.function.name === "wait_agents")) teamCalls = [call("wait_agents", { agent_ids: [earlyId], timeout_ms: 10000 })];
-        } else if (scenarioText.includes("team-early-main")) {
-          if (!called("spawn_agent")) teamCalls = [call("spawn_agent", { profile: "explore", name: "Early", task: "team-child-early" })];
-          parentAnswer = JSON.stringify(messages).includes("后台子代理已结束") ? "Background work summarized." : "Waiting for background work.";
-        } else if (!called("spawn_agent")) teamCalls = [call("spawn_agent", { profile: "explore", name: "One", task: "team-child-one", fork_context: true }), call("spawn_agent", { profile: "explore", name: "Two", task: "team-child-two" }, 1)];
-        else if (!called("send_message")) teamCalls = [call("send_message", { agent_id: one, message: "focus on tests" }), call("followup_agent", { agent_id: two, task: "team-followup" }, 1)];
-        else if (!called("interrupt_agent")) teamCalls = [call("interrupt_agent", { agent_id: one })];
-        else if (!called("resume_agent")) teamCalls = [call("resume_agent", { agent_id: one, task: "team-resumed" })];
-        else if (assistantCalls.filter((item: any) => item.function.name === "wait_agents").length === 0) teamCalls = [call("wait_agents", { agent_ids: [one], timeout_ms: 10000 })];
-        else if (assistantCalls.filter((item: any) => item.function.name === "wait_agents").length === 1) teamCalls = [call("wait_agents", { agent_ids: [two], timeout_ms: 10000 })];
-        else if (!called("close_agent")) teamCalls = [call("close_agent", { agent_id: one })];
-      }
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      const delta = teamCalls ? { tool_calls: teamCalls } : { content: collaborator ? `Collaboration result: ${text}` : parentAnswer };
-      response.write(`data: ${JSON.stringify({ id: "team-reply", object: "chat.completion.chunk", created: 1, model: "test", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
-      response.write(`data: ${JSON.stringify({ id: "team-reply", object: "chat.completion.chunk", created: 1, model: "test", choices: [{ index: 0, delta: {}, finish_reason: teamCalls ? "tool_calls" : "stop" }] })}\n\n`);
-      response.end("data: [DONE]\n\n");
-      return;
-    }
     let name = "write";
     let args: Record<string, unknown> = { path: "approved.txt", content: "approved" };
     if (text.includes("plan-write")) args.path = "blocked.txt";
@@ -260,53 +213,6 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     await assert.rejects(access(join(root, "cancelled.txt")));
 
     const otherProject = join(root, "other-project");
-    const teamSession = await client.request({ type: "create_session" }, "session_created");
-    assert.ok(teamSession.type === "session_created");
-    const teamId = teamSession.session.summary.id;
-    await client.request({ type: "set_model", sessionId: teamId, provider: "gateway-test", modelId: "test" }, "ack");
-    from = client.messages.length;
-    client.send({ type: "prompt", sessionId: teamId, text: "team-cycle-main" });
-    await client.wait((item) => item.type === "agent_end" && item.sessionId === teamId, from);
-    const teamState = await client.request({ type: "load_session", sessionId: teamId }, "session_state");
-    assert.ok(teamState.type === "session_state");
-    const runs = teamState.session.subagents!;
-    assert.equal(runs.length, 2);
-    assert.ok(runs.some((run) => run.name === "One" && run.closed && run.status === "done"));
-    assert.ok(runs.some((run) => run.name === "Two" && !run.closed && run.status === "done" && run.messages.some((message) => message.text.includes("team-followup"))));
-    const teamTools = teamState.session.messages.flatMap((message) => message.tools ?? []);
-    assert.ok(teamTools.some((tool) => tool.name === "send_message" && tool.status === "done"));
-    assert.ok(teamTools.some((tool) => tool.name === "interrupt_agent" && tool.subagent?.status === "error"));
-    assert.ok(!teamTools.some((tool) => tool.status === "error"), JSON.stringify(teamTools.filter((tool) => tool.status === "error")));
-    assert.ok(collaboratorRequests.some((request) => request.includes("team-cycle-main")), "forked context reaches the child model");
-    assert.ok(collaboratorRequests.some((request) => request.includes("focus on tests")), "messages reach the child model before resumption");
-    assert.ok(client.messages.slice(from).some((item) => item.type === "subagent_update" && item.subagent.status === "running"));
-    const early = await client.request({ type: "create_session" }, "session_created");
-    assert.ok(early.type === "session_created");
-    const earlyId = early.session.summary.id;
-    await client.request({ type: "set_model", sessionId: earlyId, provider: "gateway-test", modelId: "test" }, "ack");
-    from = client.messages.length;
-    client.send({ type: "prompt", sessionId: earlyId, text: "team-early-main" });
-    await client.wait((item) => item.type === "agent_end" && item.sessionId === earlyId, from);
-    const earlyState = await client.request({ type: "load_session", sessionId: earlyId }, "session_state");
-    assert.ok(earlyState.type === "session_state");
-    assert.equal(earlyState.session.subagents?.[0].status, "done");
-    assert.ok(earlyState.session.messages.some((message) => message.text.includes("Background work summarized.")), "parent is given a final summary turn if it finished before the children");
-    const stableChildId = earlyState.session.subagents![0].id;
-    from = client.messages.length;
-    client.send({ type: "prompt", sessionId: earlyId, text: "team-continuation-main" });
-    await client.wait((item) => item.type === "agent_end" && item.sessionId === earlyId, from);
-    const continued = await client.request({ type: "load_session", sessionId: earlyId }, "session_state");
-    assert.ok(continued.type === "session_state");
-    assert.equal(continued.session.subagents?.length, 1);
-    assert.equal(continued.session.subagents[0].id, stableChildId);
-    assert.ok(continued.session.subagents[0].messages.some((message) => message.text.includes("team-continued")), "child context survives separate parent prompts");
-    await client.request({ type: "set_primary_agent", sessionId: earlyId, agentId: "plan" }, "session_state");
-    from = client.messages.length;
-    client.send({ type: "prompt", sessionId: earlyId, text: "team-plan-main" });
-    await client.wait((item) => item.type === "agent_end" && item.sessionId === earlyId, from);
-    const planTeam = await client.request({ type: "load_session", sessionId: earlyId }, "session_state");
-    assert.ok(planTeam.type === "session_state");
-    assert.ok(planTeam.session.messages.at(-1)?.tools?.some((tool) => tool.name === "spawn_agent" && tool.status === "error" && tool.output?.includes("Plan 只能委派")), "new collaboration tools cannot bypass Plan policy");
     await mkdir(otherProject);
     const switched = await client.request({ type: "set_workspace", path: otherProject }, "ack");
     assert.equal(switched.type, "ack");
@@ -319,9 +225,6 @@ test("WebSocket roles and approvals govern real SDK tool execution, including ch
     assert.ok(resumed.type === "session_state" && resumed.session.messages.length && resumed.session.review?.finishedAt);
     assert.deepEqual(resumed.session.messages.find((message) => message.images?.length)?.images, [image], "image bytes restore from saved Pi history after session disposal");
     assert.ok(resumed.session.messages.some((message) => message.tools?.some((tool) => tool.subagent?.status === "done")), "persisted parent history restores delegated conversations");
-    const restoredTeam = await client.request({ type: "load_session", sessionId: teamId }, "session_state");
-    assert.ok(restoredTeam.type === "session_state" && restoredTeam.session.subagents?.length === 2);
-    assert.ok(restoredTeam.session.subagents.every((run) => run.closed), "released teams retain transcripts and accurately report that continuation is unavailable");
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.stack : error}\nBackend logs:\n${logs}`);
   } finally {

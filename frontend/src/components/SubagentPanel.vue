@@ -23,14 +23,13 @@ watch(() => props.tool.subagent, scrollToBottom)
   <aside class="subagent-panel relative flex min-h-0 min-w-0 flex-col bg-ink-950" aria-label="子代理聊天">
     <header class="chat-header flex shrink-0 items-center gap-2 border-b border-white/10 px-4">
       <Bot :size="19" class="shrink-0 text-accent-300" />
-      <div class="min-w-0 flex-1"><h2 class="truncate text-sm font-semibold">{{ title }}</h2><p class="mt-1 text-[11px] text-slate-500">子代理 · {{ run?.closed ? '已关闭' : status === 'running' ? '执行中' : status === 'error' ? '执行失败或已中断' : '已完成，可追加任务' }}</p></div>
+      <div class="min-w-0 flex-1"><h2 class="truncate text-sm font-semibold">{{ title }}</h2><p class="mt-1 text-[11px] text-slate-500">子代理 · {{ status === 'running' ? '执行中' : status === 'error' ? '执行失败或已取消' : '已完成' }}</p></div>
       <LoaderCircle v-if="status === 'running'" :size="15" class="animate-spin text-accent-300" />
       <button type="button" class="rounded-lg p-2 text-slate-400 hover:bg-white/5" aria-label="关闭子代理聊天" @click="emit('close')"><X :size="18" /></button>
     </header>
     <nav v-if="agents.length > 1" class="flex shrink-0 gap-2 overflow-x-auto border-b border-white/10 px-4 py-2" aria-label="切换子代理">
-      <button v-for="agent in agents" :key="agent.id" type="button" class="shrink-0 rounded-lg px-3 py-2 text-xs" :class="agent.id === tool.id ? 'bg-accent-400/10 text-accent-300' : 'text-slate-400 hover:bg-white/5'" :aria-pressed="agent.id === tool.id" @click="emit('select', agent.id)">{{ agentLabel(agent) }} · {{ agent.subagent?.closed ? '已关闭' : agent.status === 'running' ? '执行中' : agent.status === 'error' ? '失败或中断' : '已完成' }}</button>
+      <button v-for="agent in agents" :key="agent.id" type="button" class="shrink-0 rounded-lg px-3 py-2 text-xs" :class="agent.id === tool.id ? 'bg-accent-400/10 text-accent-300' : 'text-slate-400 hover:bg-white/5'" :aria-pressed="agent.id === tool.id" @click="emit('select', agent.id)">{{ agentLabel(agent) }} · {{ agent.status === 'running' ? '执行中' : agent.status === 'error' ? '失败' : '已完成' }}</button>
     </nav>
-    <p v-if="run && !run.closed" class="shrink-0 border-b border-white/10 px-4 py-2 text-[11px] leading-5 text-slate-500">可在主对话中要求给此代理发消息、追加任务、中断或关闭。<span class="mono block truncate" :title="run.id">{{ run.id }}</span></p>
     <div ref="scrollArea" tabindex="0" class="min-h-0 flex-1 overflow-y-auto overscroll-contain" @scroll="onScroll" @wheel.passive="onWheel" @touchstart.passive="onTouchStart" @touchmove.passive="onTouchMove" @keydown="onScrollKey">
       <div ref="content" class="chat-thread mx-auto w-full">
         <MessageBubble v-if="!messages.some(message => message.role === 'user')" :message="{ id: 'task', role: 'user', text: run?.task || input?.task || '正在启动子代理…' }" />

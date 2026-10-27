@@ -23,7 +23,7 @@ export type { RunReview, WorkspaceInfo, DirectoryListing } from '../../shared/ty
 export type { PrimaryAgentInfo, PermissionRequest, PermissionDecision, PermissionRule } from '../../shared/types'
 export { PROTOCOL_VERSION } from '../../shared/types'
 
-import type { ChatMessage, ContextUsage, SessionSummary, ThinkingLevel, RunReview, SubagentRun } from '../../shared/types'
+import type { ChatMessage, ContextUsage, SessionSummary, ThinkingLevel, RunReview } from '../../shared/types'
 
 export interface SessionUiState {
   summary: SessionSummary
@@ -37,7 +37,6 @@ export interface SessionUiState {
   epoch?: string
   sequence?: number
   review?: RunReview
-  subagents?: SubagentRun[]
   revision: number
 }
 

@@ -3,27 +3,6 @@ import test from 'node:test'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSessionPool } from '../src/stores/session-pool'
 import type { SubagentRun } from '../src/types'
-import { collaborationTools } from '../src/lib/subagents'
-
-test('background collaboration updates survive parent message replacement and reconnect without duplicate agents', () => {
-  setActivePinia(createPinia())
-  const store = useSessionPool()
-  const summary = { id: 'team', title: 'Collaborate', updatedAt: new Date(1).toISOString() }
-  const run: SubagentRun = { id: 'worker', name: 'Worker', profile: 'explore', task: 'inspect', status: 'running', messages: [] }
-  store.handleServerMessage({ type: 'session_state', session: { summary, messages: [], thinkingLevel: 'medium', isStreaming: true } })
-  store.handleServerMessage({ type: 'subagent_update', sessionId: 'team', subagent: run })
-  store.handleServerMessage({ type: 'tool_start', sessionId: 'team', tool: { id: 'spawn', name: 'spawn_agent', status: 'running' } })
-  store.handleServerMessage({ type: 'tool_end', sessionId: 'team', toolCallId: 'spawn', subagent: run })
-  store.handleServerMessage({ type: 'subagent_update', sessionId: 'team', subagent: { ...run, status: 'done' } })
-  store.handleServerMessage({ type: 'message_end', sessionId: 'team', message: { id: 'parent-final', role: 'assistant', text: 'done', tools: [{ id: 'spawn', name: 'spawn_agent', status: 'done', subagent: run }, { id: 'followup', name: 'followup_agent', status: 'done', subagent: run }] } })
-  let agents = collaborationTools(store.sessionStates.team.messages, store.sessionStates.team.subagents!)
-  assert.equal(agents.length, 1)
-  assert.equal(agents[0].subagent?.status, 'done', 'the latest background state wins over stale tool snapshots')
-  store.handleServerMessage({ type: 'session_state', session: { summary, messages: store.sessionStates.team.messages, subagents: [{ ...run, status: 'error', closed: true }], thinkingLevel: 'medium', isStreaming: false } })
-  agents = collaborationTools(store.sessionStates.team.messages, store.sessionStates.team.subagents!)
-  assert.equal(agents[0].subagent?.closed, true)
-  assert.equal(store.sessionStates.team.isStreaming, false)
-})
 
 test('interleaved delegated conversations update independently and survive a reconnect snapshot', () => {
   setActivePinia(createPinia())

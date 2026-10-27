@@ -5,10 +5,9 @@ import type { ToolCall } from '@/types'
 
 const props = defineProps<{ tool: ToolCall }>()
 const emit = defineEmits<{ subagent: [toolId: string] }>()
-const isSubagent = computed(() => props.tool.name === 'Agent' || props.tool.name === 'spawn_agent' || !!props.tool.subagent)
+const isSubagent = computed(() => props.tool.name === 'Agent' || !!props.tool.subagent)
 const profile = computed(() => props.tool.subagent?.name || (props.tool.input as { profile?: string } | undefined)?.profile || '子代理')
 const task = computed(() => props.tool.subagent?.task || (props.tool.input as { task?: string } | undefined)?.task || '点击查看执行过程')
-const status = computed(() => isSubagent.value ? props.tool.subagent?.status ?? props.tool.status : props.tool.status)
 const open = ref(false)
 const showFullOutput = ref(false)
 const output = computed(() => showFullOutput.value ? props.tool.output : props.tool.output?.slice(-12_000))
@@ -25,11 +24,11 @@ function format(value: unknown) {
     <button type="button" class="flex w-full items-center gap-2 px-3 py-3 text-left text-[13px] transition hover:bg-white/[.045]" :aria-expanded="isSubagent ? undefined : open" :aria-label="isSubagent ? `查看子代理 ${profile} 的执行过程` : undefined" @click="isSubagent ? emit('subagent', tool.id) : open = !open">
       <Bot v-if="isSubagent" :size="16" class="text-accent-300" /><Wrench v-else :size="14" class="text-slate-400" />
       <span class="mono min-w-0 truncate font-medium text-slate-200">{{ isSubagent ? profile : tool.name }}</span>
-      <span class="ml-auto flex items-center gap-1.5 text-[11px]" :class="status === 'error' ? 'text-rose-400' : status === 'done' ? 'text-emerald-400' : 'text-amber-300'">
-        <LoaderCircle v-if="status === 'running'" :size="12" class="animate-spin" />
-        <CircleCheck v-else-if="status === 'done'" :size="12" />
+      <span class="ml-auto flex items-center gap-1.5 text-[11px]" :class="tool.status === 'error' ? 'text-rose-400' : tool.status === 'done' ? 'text-emerald-400' : 'text-amber-300'">
+        <LoaderCircle v-if="tool.status === 'running'" :size="12" class="animate-spin" />
+        <CircleCheck v-else-if="tool.status === 'done'" :size="12" />
         <CircleX v-else :size="12" />
-        {{ tool.subagent?.closed ? '已关闭' : status === 'running' ? '执行中' : status === 'done' ? '已完成' : '失败或已中断' }}
+        {{ tool.status === 'running' ? '执行中' : tool.status === 'done' ? '已完成' : '失败' }}
       </span>
       <PanelRightOpen v-if="isSubagent" :size="15" class="text-accent-300" />
       <ChevronDown v-else :size="13" class="text-slate-500 transition-transform" :class="open ? 'rotate-180' : ''" />

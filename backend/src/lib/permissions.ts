@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { PermissionDecision, PermissionRequest, PermissionRule, PrimaryAgentInfo, ServerMessage, SubagentRun } from "../../../shared/types.js";
+import type { PermissionDecision, PermissionRequest, PermissionRule, PrimaryAgentInfo, ServerMessage } from "../../../shared/types.js";
 
 export function matches(pattern: string, value: string): boolean {
   const expression = pattern.split("*").map((part) => part.split("?").map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".")).join(".*");
@@ -139,7 +139,6 @@ export interface RoleRuntime {
   sessionId: string;
   profile: PrimaryAgentInfo;
   controller: AbortController;
-  onSubagentUpdate?: (run: SubagentRun) => void;
 }
 
 async function canonicalPath(path: string): Promise<string> {
@@ -176,12 +175,11 @@ async function toolResource(toolName: string, input: Record<string, unknown>, cw
 /** Shared by root and child sessions, so delegation cannot bypass the root policy. */
 export function createPermissionExtension(
   runtime: RoleRuntime, broker: PermissionBroker, cwd: string,
-  child?: { id: string; name: string; permissions?: PermissionRule[]; tools: string[]; signal?: () => AbortSignal },
+  child?: { id: string; name: string; permissions?: PermissionRule[]; tools: string[] },
 ): ExtensionFactory {
   return (pi) => {
     pi.on("tool_call", async (event) => {
-      const signal = child?.signal ? AbortSignal.any([runtime.controller.signal, child.signal()]) : runtime.controller.signal;
-      if (signal.aborted) return { block: true, reason: "任务已取消" };
+      if (runtime.controller.signal.aborted) return { block: true, reason: "任务已取消" };
       if (!child && !runtime.profile.tools.some((pattern) => matches(pattern, event.toolName))) {
         return { block: true, reason: "主代理未获准调用此工具" };
       }
@@ -204,7 +202,7 @@ export function createPermissionExtension(
           agentName: child ? `${runtime.profile.name} / ${child.name}` : runtime.profile.name,
           toolName: event.toolName, resource, input: event.input, action: check.action,
           patterns: approvalPatterns(check.action, resource, ["grep", "find", "ls"].includes(event.toolName)),
-        }, signal);
+        }, runtime.controller.signal);
         if (!allowed) return { block: true, reason: "用户未允许此次操作" };
       }
     });

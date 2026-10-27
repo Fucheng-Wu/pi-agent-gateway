@@ -113,10 +113,6 @@ Other events include `thinking_delta`, `tool_update`, `message_end`, `run_review
 
 ### Snapshots and concurrent events
 
-Background collaborators publish `subagent_update` events containing `{ sessionId, subagent }` independently of the tool that started them. `subagent.id` is the stable collaborator ID; merge updates by that ID. A successful `spawn_agent` tool call can finish while its `subagent.status` is still `running`. Follow-up tools can refer to the same collaborator, so do not create another sidebar entry for each call. `session_state.session.subagents` contains the latest collaboration snapshots, including after reconnect. Prefer these over earlier tool-result snapshots. A `closed: true` collaborator retains its transcript but cannot accept more work.
-
-Tools available to the model are documented in the [subagent guide](../backend/subagents/README.md). They are model tools, not new WebSocket commands. The parent task stays active until its background work and any final summary finish; `abort` also stops those child tasks. Disposed/restarted sessions retain closed transcripts, without promising that child execution can be resumed.
-
 Session snapshots carry `epoch` (a new ID whenever the in-memory session is attached) and `sequence` (the last event included). Each execution event carries the same `epoch` and a strictly increasing `sequence` for that session. These are additive v1 fields; clients that ignore them can still connect.
 
 While requesting a snapshot, buffer live events. Install the authoritative snapshot through sequence N and apply only buffered events from the same epoch with sequence greater than N. Ignore duplicates. If the epoch changes, a sequence gap is detected, or a bounded event buffer overflows, request a fresh snapshot. Never discard the entire snapshot merely because an event arrived during loading: it may contain text missed during disconnection. Reconnect with a fresh init and reload every cached/watched session, including background sessions. There is no event replay cursor.

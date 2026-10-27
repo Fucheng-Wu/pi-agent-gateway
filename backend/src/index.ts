@@ -136,7 +136,6 @@ function snapshot(active: ActiveSession): SessionSnapshot {
     epoch: active.epoch,
     sequence: active.sequence,
     review: active.review,
-    subagents: resources.features.subagentRuns(active.id, active.manager.getBranch()),
   };
 }
 
@@ -200,18 +199,8 @@ function startPrompt(ws: WebSocket, active: ActiveSession, text: string, request
     try {
       if (active.role.controller.signal.aborted) throw new Error("任务已取消");
       await active.session.prompt(text, { images: images?.map(({ data, mimeType }) => ({ type: "image" as const, data, mimeType })) });
-      while (resources.features.hasRunningSubagents(active.id)) {
-        await resources.features.drainSubagents(active.id);
-        if (active.role.controller.signal.aborted) break;
-        await active.session.sendCustomMessage({
-          customType: "collaboration-summary", display: false,
-          content: "后台子代理已结束。请结合收到的协作结果，检查错误与未完成事项，验证并汇总后再向用户报告。",
-        }, { triggerTurn: true });
-      }
     }
     finally {
-      if (resources.features.hasRunningSubagents(active.id)) active.role.controller.abort();
-      await resources.features.drainSubagents(active.id);
       const review = active.review!;
       Object.assign(review, compareWorkspace(before, await captureWorkspace(resources.cwd)));
       review.finishedAt = new Date().toISOString();

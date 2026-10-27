@@ -65,8 +65,6 @@ export interface SubagentRun {
   status: "running" | "done" | "error";
   messages: ChatMessage[];
   error?: string;
-  /** Closed agents retain their transcript but cannot accept more tasks. */
-  closed?: boolean;
 }
 
 /** Raw base64 image bytes (without a data URL prefix). */
@@ -193,7 +191,6 @@ export interface SessionSnapshot {
   epoch?: string;
   sequence?: number;
   review?: RunReview;
-  subagents?: SubagentRun[];
 }
 
 export interface WorkspaceInfo {
@@ -224,7 +221,6 @@ export const PROTOCOL_VERSION = 1 as const;
  * unpacking a nested event envelope.
  */
 export type AgentUiEvent = (
-  | { type: "subagent_update"; sessionId: string; subagent: SubagentRun }
   | { type: "agent_start"; sessionId: string }
   | { type: "text_delta"; sessionId: string; delta: string }
   | { type: "thinking_delta"; sessionId: string; delta: string }
