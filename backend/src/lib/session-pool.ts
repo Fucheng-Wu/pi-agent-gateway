@@ -20,6 +20,8 @@ export class SessionPool {
         .sort((a, b) => a.lastAccessAt - b.lastAccessAt)[0];
       if (!candidate) {
         active.unsubscribe?.();
+        active.role.controller.abort();
+        active.onDispose?.();
         active.session.dispose();
         throw new Error(`同时最多可运行 ${this.maxActive} 个会话，请等待一个对话完成`);
       }

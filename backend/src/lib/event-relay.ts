@@ -46,6 +46,7 @@ function finishedMessage(active: ActiveSession, raw: unknown): ChatMessage | und
 }
 
 export function attachEventRelay(active: ActiveSession, send: SendEvent, sendSnapshot?: () => void): void {
+  active.role.onSubagentUpdate = (subagent) => send({ type: "subagent_update", sessionId: active.id, subagent });
   active.unsubscribe = active.session.subscribe((event: AgentSessionEvent) => {
     try {
       switch (event.type) {

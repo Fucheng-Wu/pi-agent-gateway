@@ -6,6 +6,7 @@ import type {
 } from '@/types'
 import type { PrimaryAgentInfo, PermissionRequest, PermissionDecision } from '@/types'
 import { PROTOCOL_VERSION } from '@/types'
+import { refreshCollaborationTools } from '@/lib/subagents'
 
 type Sender = (message: ClientMessage) => boolean
 type AuthChallenge = Extract<ServerMessage, { type: 'auth_challenge' }>
@@ -16,6 +17,7 @@ function id(prefix: string) {
 }
 
 function fromSnapshot(snapshot: SessionSnapshot): SessionUiState {
+  refreshCollaborationTools(snapshot.messages, snapshot.subagents ?? [])
   const lastMessage = snapshot.messages.at(-1)
   return {
     summary: snapshot.summary,
@@ -28,6 +30,7 @@ function fromSnapshot(snapshot: SessionSnapshot): SessionUiState {
     epoch: snapshot.epoch,
     sequence: snapshot.sequence,
     review: snapshot.review,
+    subagents: snapshot.subagents ?? [],
     revision: 0,
     streamMessageId: snapshot.isStreaming && lastMessage?.role === 'assistant' ? lastMessage.id : undefined
   }
@@ -345,6 +348,16 @@ export const useSessionPool = defineStore('session-pool', () => {
     if (event.sequence !== undefined) state.sequence = event.sequence
     state.revision++
     switch (event.type) {
+      case 'subagent_update': {
+        const agents = state.subagents ??= []
+        const index = agents.findIndex((run) => run.id === event.subagent.id)
+        if (index >= 0) agents[index] = event.subagent
+        else agents.push(event.subagent)
+        for (const message of state.messages) for (const tool of message.tools ?? []) {
+          if (tool.subagent?.id === event.subagent.id) tool.subagent = event.subagent
+        }
+        break
+      }
       case 'agent_start':
         state.isStreaming = true
         break
@@ -368,12 +381,14 @@ export const useSessionPool = defineStore('session-pool', () => {
         if (tool) {
           if (event.output !== undefined) tool.output = event.output
           if (event.subagent) tool.subagent = event.subagent
+          refreshCollaborationTools(state.messages, state.subagents ?? [])
           if (event.type === 'tool_end') tool.status = event.isError ? 'error' : 'done'
         }
         break
       }
       case 'message_end': {
         const incoming = event.message
+        refreshCollaborationTools([incoming], state.subagents ?? [])
         if (incoming.role === 'user') {
           const optimisticId = promptRequests.get(state.summary.id)?.optimisticId
           // Pi may resize images and append dimension hints to the submitted text.
@@ -517,6 +532,7 @@ export const useSessionPool = defineStore('session-pool', () => {
           if (sessions.value.length) selectSession(sortedSessions.value[0].id)
         }
         break
+      case 'subagent_update':
       case 'agent_start':
       case 'text_delta':
       case 'thinking_delta':

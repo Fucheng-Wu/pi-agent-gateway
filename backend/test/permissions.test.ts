@@ -62,6 +62,31 @@ async function guard(runtime: RoleRuntime, cwd: string, broker: PermissionBroker
   return (toolName: string, input: Record<string, unknown>) => handler({ type: "tool_call", toolName, input, toolCallId: "call" } as ToolCallEvent);
 }
 
+test("interrupting one collaborator cancels its approval without cancelling the root, and resumed work gets a fresh signal", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-child-approval-"));
+  const broker = new PermissionBroker();
+  broker.setOwner("root", "client");
+  const runtime: RoleRuntime = { sessionId: "root", profile: BUILTIN_PRIMARY_AGENTS[0], controller: new AbortController() };
+  let childController = new AbortController();
+  try {
+    const check = await guard(runtime, cwd, broker, {
+      id: "worker", name: "Worker", tools: ["write"],
+      permissions: [{ action: "*", resource: "*", effect: "ask" }], signal: () => childController.signal,
+    });
+    const first = check("write", { path: "one.ts" });
+    while (!broker.list("client").length) await new Promise((done) => setImmediate(done));
+    childController.abort();
+    assert.ok((await first as { block: boolean }).block);
+    assert.equal(broker.list("client").length, 0);
+    assert.equal(runtime.controller.signal.aborted, false);
+    childController = new AbortController();
+    const next = check("write", { path: "two.ts" });
+    while (!broker.list("client").length) await new Promise((done) => setImmediate(done));
+    broker.respond("client", broker.list("client")[0].id, "allow_once");
+    assert.equal(await next, undefined);
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
 test("Plan denies project writes including delegated calls, but asks before saving plans", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-policy-"));
   const broker = new PermissionBroker();

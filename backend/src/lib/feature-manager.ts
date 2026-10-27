@@ -4,6 +4,7 @@ import { mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   createAgentSession,
+  buildSessionContext,
   createCodemodeExtension,
   createMcpExtension,
   createToolSearchExtension,
@@ -22,6 +23,8 @@ import { Type } from "typebox";
 import { createPermissionExtension, parsePermissions, type PermissionBroker, type RoleRuntime } from "./permissions.js";
 import type { PrimaryAgentRegistry } from "./primary-agents.js";
 import { trackSubagent } from "./subagent-progress.js";
+import { convertMessages } from "./message-converter.js";
+import { SubagentTeam, subagentResult } from "./subagent-team.js";
 import type {
   FeatureSettings,
   McpConfigInfo,
@@ -181,6 +184,28 @@ function parseMcpConfig(content: string): { parsed: Record<string, unknown>; ser
 export class FeatureManager {
   private readonly packageManager: DefaultPackageManager;
   private activeSubagents = 0;
+  private readonly teams = new Map<string, SubagentTeam>();
+
+  subagentRuns(sessionId: string, entries: readonly unknown[]): SubagentRun[] {
+    const runs = new Map<string, SubagentRun>();
+    for (const raw of entries) {
+      const entry = raw as { type?: string; customType?: string; data?: SubagentRun };
+      if (entry.type === "custom" && entry.customType === "collaboration-agent" && entry.data?.id) {
+        // A restored transcript has no live SDK session to resume.
+        runs.set(entry.data.id, { ...entry.data, closed: true, ...(entry.data.status === "running" ? { status: "error" as const, error: "子代理会话已释放，无法继续执行" } : {}) });
+      }
+    }
+    for (const run of this.teams.get(sessionId)?.list() ?? []) runs.set(run.id, run);
+    return [...runs.values()];
+  }
+
+  async drainSubagents(sessionId: string): Promise<void> { await this.teams.get(sessionId)?.drain(); }
+  hasRunningSubagents(sessionId: string): boolean { return this.teams.get(sessionId)?.list().some((run) => run.status === "running") ?? false; }
+  async disposeSubagents(sessionId: string): Promise<void> {
+    const team = this.teams.get(sessionId);
+    this.teams.delete(sessionId);
+    await team?.dispose();
+  }
 
   constructor(
     private readonly cwd: string,
@@ -389,11 +414,135 @@ export class FeatureManager {
 
   private createSubagentExtension(runtime: RoleRuntime): ExtensionFactory {
     return async (pi) => {
+      await this.disposeSubagents(runtime.sessionId);
       const settings = await this.getSubagentSettings();
       if (!settings.enabled) return;
       const enabledProfiles = settings.profiles.filter((profile) => profile.enabled);
       if (!enabledProfiles.length) return;
       const profileSummary = enabledProfiles.map((profile) => `${profile.id}: ${profile.description}`).join("；");
+      const persistedStatus = new Map<string, SubagentRun["status"]>();
+      const team = new SubagentTeam(async () => {
+        const latest = await this.getSubagentSettings();
+        if (!latest.enabled) throw new Error("子代理功能已关闭");
+        if (this.activeSubagents >= latest.maxConcurrent) throw new Error(`子代理并发已达到上限 ${latest.maxConcurrent}`);
+        this.activeSubagents++;
+        return () => { this.activeSubagents--; };
+      }, (run, settled) => {
+        runtime.onSubagentUpdate?.(run);
+        if (settled || run.status !== "running" || persistedStatus.get(run.id) !== run.status) pi.appendEntry("collaboration-agent", run);
+        persistedStatus.set(run.id, run.status);
+        if (!settled) return;
+        if (!run.closed && !runtime.controller.signal.aborted) pi.sendMessage({
+          customType: "collaboration-result", display: true,
+          content: `子代理 ${run.name} (${run.id}) ${run.status === "error" ? "失败" : "已完成"}：\n${subagentResult(run)}`,
+        }, { deliverAs: "steer" });
+      });
+      this.teams.set(runtime.sessionId, team);
+      pi.on("session_shutdown", async () => {
+        if (this.teams.get(runtime.sessionId) === team) await this.disposeSubagents(runtime.sessionId);
+      });
+      const result = (run: SubagentRun) => ({
+        content: [{ type: "text" as const, text: JSON.stringify({ agent_id: run.id, name: run.name, status: run.status, closed: run.closed, result: run.status === "running" ? undefined : subagentResult(run) }) }],
+        details: { subagent: run },
+      });
+      const currentProfile = async (id: string) => {
+        const latest = await this.getSubagentSettings();
+        if (!latest.enabled) throw new Error("子代理功能已关闭");
+        const profile = latest.profiles.find((item) => item.id === id && item.enabled);
+        if (!profile) throw new Error(`子代理角色不可用：${id}`);
+        if (runtime.profile.id === "plan" && (profile.extensions.length > 0 || profile.tools.some((tool) => !["read", "grep", "find", "ls"].includes(tool)))) {
+          throw new Error("Plan 只能委派不含扩展的只读子代理，请切换到 Build 后执行修改任务");
+        }
+        return profile;
+      };
+      const continueAgent = async (id: string, task: string) => {
+        const run = team.list().find((item) => item.id === id);
+        if (!run) throw new Error(`当前会话中不存在子代理：${id}`);
+        await currentProfile(run.profile);
+        return result(await team.followup(id, task, runtime.controller.signal));
+      };
+      pi.registerTool(defineTool({
+        name: "spawn_agent", label: "启动协作代理", exposure: "model-only", executionMode: "parallel",
+        description: `后台启动子代理并立即返回 agent_id，主代理可继续工作。可用角色：${profileSummary}`,
+        promptSnippet: "spawn_agent: start an independent background collaborator",
+        promptGuidelines: [
+          "独立任务用 spawn_agent 并行分派；明确每个子代理负责的文件和交付结果，避免同时修改同一文件。所有代理共享工作目录。",
+          "用 send_message 沟通、followup_agent/resume_agent 追加任务，wait_agents 等待结果。最终回答前汇总并验证所有子代理结果。",
+          "同一子代理有依赖关系的操作按顺序调用；wait_agents 在任意一个指定代理完成时返回，继续等待时只传尚未完成的 ID。",
+          "fork_context 默认关闭；需要当前对话背景时开启。子代理保留自己的上下文，不能假设它自动知道主对话。",
+        ],
+        parameters: Type.Object({
+          profile: Type.String({ description: "子代理角色 ID" }),
+          task: Type.String({ minLength: 1, maxLength: 100_000 }),
+          name: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
+          fork_context: Type.Optional(Type.Boolean({ description: "复制主对话的当前消息，默认 false" })),
+        }),
+        execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+          const profile = await currentProfile(params.profile);
+          if (!ctx.model) throw new Error("当前会话尚未选择模型");
+          const inherited = params.fork_context ? buildSessionContext(ctx.sessionManager.getBranch()).messages : [];
+          const run = team.spawn({ profile: profile.id, name: params.name || profile.name, task: params.task }, async (signal, currentSignal) => {
+            const allowedSkills = new Set(profile.skills);
+            const childLoader = new DefaultResourceLoader({
+              cwd: ctx.cwd, agentDir: this.agentDir, settingsManager: this.settingsManager,
+              noExtensions: true, additionalExtensionPaths: this.profileExtensionPaths(profile),
+              extensionFactories: [createPermissionExtension(runtime, this.permissionBroker, ctx.cwd, { ...profile, signal: currentSignal })],
+              additionalSkillPaths: [this.projectSkillsDir],
+              skillsOverride: ({ skills, diagnostics }) => ({ skills: allowedSkills.has("*") ? skills : skills.filter((skill) => allowedSkills.has(skill.name)), diagnostics }),
+              systemPrompt: `${profile.systemPrompt}\n你是主代理的协作者，与其他代理共享工作目录。专注被分派的任务，不覆盖他人的修改。最后报告结果、验证及未解决问题。`,
+            });
+            await childLoader.reload();
+            if (signal.aborted) throw new Error("子代理任务已取消");
+            const manager = SessionManager.inMemory(ctx.cwd);
+            if (inherited.length) manager.appendCustomMessageEntry("collaboration-context", `以下是启动时的主对话背景，仅作参考；以分派给你的任务为准：\n${JSON.stringify(convertMessages(inherited))}`, false);
+            const { session } = await createAgentSession({
+              cwd: ctx.cwd, agentDir: this.agentDir, modelRuntime: this.modelRuntime,
+              settingsManager: this.settingsManager, resourceLoader: childLoader, sessionManager: manager,
+              model: ctx.model!, thinkingLevel: ctx.thinkingLevel, tools: profile.tools,
+            });
+            try { await session.bindExtensions({}); return session; }
+            catch (error) { session.dispose(); throw error; }
+          }, runtime.controller.signal);
+          return result(run);
+        },
+      }));
+      pi.registerTool(defineTool({
+        name: "list_agents", label: "协作代理状态", exposure: "model-only", executionMode: "parallel",
+        description: "查看当前主会话创建的协作子代理及状态。",
+        parameters: Type.Object({}),
+        execute: async (_id, _params, _signal, _update, ctx) => ({ content: [{ type: "text", text: JSON.stringify(this.subagentRuns(runtime.sessionId, ctx.sessionManager.getBranch()).map(({ messages: _messages, ...run }) => run)) }], details: {} }),
+      }));
+      pi.registerTool(defineTool({
+        name: "send_message", label: "发送协作消息", exposure: "model-only", executionMode: "parallel",
+        description: "给子代理发送补充信息。运行中在工具边界送达，空闲时保存至上下文；不启动新任务。",
+        parameters: Type.Object({ agent_id: Type.String(), message: Type.String({ minLength: 1, maxLength: 100_000 }) }),
+        execute: async (_id, params) => {
+          const run = team.list().find((item) => item.id === params.agent_id);
+          if (run) await currentProfile(run.profile);
+          return result(await team.message(params.agent_id, params.message));
+        },
+      }));
+      for (const name of ["followup_agent", "resume_agent"]) pi.registerTool(defineTool({
+        name, label: "追加协作任务", exposure: "model-only", executionMode: "parallel",
+        description: "复用同一个子代理及其历史执行任务；运行中追加到队列，已完成或中断时继续执行。已关闭的代理不可恢复。",
+        parameters: Type.Object({ agent_id: Type.String(), task: Type.String({ minLength: 1, maxLength: 100_000 }) }),
+        execute: async (_id, params) => continueAgent(params.agent_id, params.task),
+      }));
+      pi.registerTool(defineTool({
+        name: "wait_agents", label: "等待协作结果", exposure: "model-only", executionMode: "parallel",
+        description: "等待指定子代理中任意一个完成，返回全部指定代理的状态与已完成结果。timeout_ms=0 立即查看；超时不停止代理。",
+        parameters: Type.Object({ agent_ids: Type.Array(Type.String(), { minItems: 1, maxItems: 64 }), timeout_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 60_000 })) }),
+        execute: async (_id, params, signal) => {
+          const state = await team.wait(params.agent_ids, params.timeout_ms ?? 30_000, signal);
+          return { content: [{ type: "text", text: JSON.stringify({ timed_out: state.timedOut, agents: state.runs.map((run) => ({ agent_id: run.id, status: run.status, closed: run.closed, result: run.status === "running" ? undefined : subagentResult(run) })) }) }], details: {} };
+        },
+      }));
+      for (const name of ["interrupt_agent", "close_agent"]) pi.registerTool(defineTool({
+        name, label: name === "close_agent" ? "关闭协作代理" : "中断协作任务", exposure: "model-only", executionMode: "parallel",
+        description: name === "close_agent" ? "停止并释放子代理，保留历史但不可续跑。" : "中断子代理当前任务，可用 resume_agent 继续。",
+        parameters: Type.Object({ agent_id: Type.String() }),
+        execute: async (_id, params) => result(await (name === "close_agent" ? team.close(params.agent_id) : team.interrupt(params.agent_id))),
+      }));
       const completed = new Map<string, SubagentRun>();
       pi.on("tool_result", (event) => {
         const run = completed.get(event.toolCallId);

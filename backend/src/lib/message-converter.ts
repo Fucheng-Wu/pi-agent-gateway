@@ -61,6 +61,12 @@ export function convertMessages(messages: readonly unknown[], indexOffset = 0): 
     const id = string(item.id) ?? `message-${index}`;
     const at = timestamp(item.timestamp);
 
+    if (item.role === "custom" && item.display === true && ["collaboration-message", "collaboration-result"].includes(String(item.customType))) {
+      assistantTurn = undefined;
+      converted.push({ id, role: "tool", text: contentText(item.content), timestamp: at });
+      return;
+    }
+
     if (item.role === "user") {
       assistantTurn = undefined;
       const images = Array.isArray(item.content) ? item.content
